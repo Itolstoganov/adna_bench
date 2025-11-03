@@ -1,0 +1,6 @@
+gargammel_data
+datasets
+reads
+.*
+workflow/.snakemake/*
+*__pycache__*

@@ -1,0 +1,64 @@
+configfile: "configs/config.yaml"
+
+DATASETS = config["genomes"]
+NUM_READS = config.get("num_reads", 100000)
+READ_LEN = config.get("read_len", 40)
+
+SCRIPTS = "workflow/scripts"
+
+rule all:
+    input:
+        expand("datasets/{dataset}/{read_len}/fastp/1.fq.gz", dataset=DATASETS, read_len=READ_LEN),
+        expand("datasets/{dataset}/{read_len}/fastp/2.fq.gz", dataset=DATASETS, read_len=READ_LEN),
+        expand("datasets/{dataset}/{read_len}/ground_truth.tsv", dataset=DATASETS, read_len=READ_LEN)
+
+
+rule gargammel_simulate:
+    input:
+        dataset="datasets/{dataset}"
+    output:
+        s1="datasets/{dataset}/{read_len}/simulated_s1.fq.gz",
+        s2="datasets/{dataset}/{read_len}/simulated_s2.fq.gz"
+    params:
+        num_reads=NUM_READS,
+        outdir="datasets/{dataset}/{read_len}/simulated"
+    conda:
+        "envs/gargammel.yml"
+    shell:
+        """
+        gargammel -n {params.num_reads} --comp 0.6,0.05,0.35 -l {wildcards.read_len} \
+        -damage 0.03,0.4,0.01,0.3 -o {params.outdir} {input.dataset}
+        """
+
+
+rule fastp_process:
+    input:
+        s1="datasets/{dataset}/{read_len}/simulated_s1.fq.gz",
+        s2="datasets/{dataset}/{read_len}/simulated_s2.fq.gz"
+    output:
+        o1="datasets/{dataset}/{read_len}/fastp/1.fq.gz",
+        o2="datasets/{dataset}/{read_len}/fastp/2.fq.gz",
+        html="datasets/{dataset}/{read_len}/fastp/fastp.html",
+        json="datasets/{dataset}/{read_len}/fastp/fastp.json"
+    threads: 4
+    shell:
+        """
+        fastp --in1 {input.s1} --in2 {input.s2} \
+        --out1 {output.o1} --out2 {output.o2} \
+        --html {output.html} --json {output.json} \
+        --thread {threads}
+        """
+        
+
+rule parse_gt:
+    input:
+        r1="datasets/{dataset}/{read_len}/fastp/1.fq.gz",
+        r2="datasets/{dataset}/{read_len}/fastp/2.fq.gz"
+    output:
+        gt="datasets/{dataset}/{read_len}/ground_truth.tsv"
+    params:
+        input_dir="datasets/{dataset}/{read_len}"
+    shell:
+        """
+        {SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} -o {output.gt}
+        """

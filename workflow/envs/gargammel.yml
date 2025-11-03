@@ -1,0 +1,6 @@
+name: gargammel
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - gargammel

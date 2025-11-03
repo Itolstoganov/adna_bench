@@ -1,0 +1,82 @@
+configfile: "configs/config.yaml"
+
+module alignment:
+    snakefile: "rules/alignment.smk"
+
+include: "rules/alignment.smk"
+
+MODES = config.get("modes", ("align"))
+ENDS = config.get("ends", ("pe"))
+# DATASETS = config["datasets"]
+GENOMES = config["genomes"]
+READ_LENGTHS = config["read-len"]
+
+VERSIONS = {}
+for version in config.get("versions", []):
+    key = version["commit"]
+    if arg := version.get("arguments", ""):
+        key += "-" + arg.replace(" ", "").replace("-", "").replace("=", "")
+    VERSIONS[key] = {
+        "commit": version["commit"],
+        "arguments": f" {arg}" if arg else "",
+        "name": version["name"],
+        "color": version["color"],
+        "binary": f"bin/strobealign/{version['commit']}",
+    }
+
+PROGRAMS = expand("strobealign-{key}", key=VERSIONS.keys())
+if config["programs"]:
+    PROGRAMS.extend(config["programs"])
+PLOTS = ("accuracy", "aligned", "time", "memory")
+
+
+rule final:
+    input:
+        expand("csv/{prog}/{genome}-{read_length}/pe.bam.resources.csv", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
+        # expand("runs/{prog}/{genome}-{read_length}/pe.bam", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
+        expand("result/{genome}-{read_length}/accuracy_table.tsv", genome=GENOMES, read_length=READ_LENGTHS)
+
+
+rule run_adna_accuracy:
+    output:
+        "csv/{prog}/{genome}-{read_length}/accuracy.tsv"
+    input:
+        fastq="datasets/{genome}/{read_length}/fastp/1.fq.gz",
+        bam="runs/{prog}/{genome}-{read_length}/pe.bam"
+    shell:
+        "python workflow/scripts/adna_accuracy.py --fastq {input.fastq} --predicted {input.bam} > {output}"
+
+
+rule accuracy_tables:
+    output:
+        "result/{genome}-{read_length}/accuracy_table.tsv"
+    input:
+        expand("csv/{prog}/{{genome}}-{{read_length}}/accuracy.tsv", prog=PROGRAMS)
+    params:
+        programs=PROGRAMS,
+        config=config
+    run:
+        import csv
+
+        tool_names = {}
+        for key, version in VERSIONS.items():
+            prog_name = f"strobealign-{key}"
+            tool_names[prog_name] = version["name"]
+
+        for prog in config.get("programs", []):
+            tool_names[prog] = prog
+
+        with open(output[0], 'w', newline='') as outfile:
+            writer = csv.writer(outfile, delimiter='\t')
+            writer.writerow([
+                "Tool",
+                "% Mapped endogenous reads",
+                "% Mapped bacterial reads",
+                "% Mapped contaminated reads"
+            ])
+
+            for prog, input_file in zip(params.programs, input):
+                tool_name = tool_names.get(prog, prog)
+                with open(input_file) as f:
+                    values = f.read().strip().split('\t')
+                    writer.writerow([tool_name] + values)

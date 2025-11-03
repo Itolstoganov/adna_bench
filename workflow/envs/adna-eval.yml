@@ -1,0 +1,25 @@
+name: adna-eval
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - ncbi-genome-download
+  # - mason=2.0.9 # we compile a more recent version to avoid some crashes
+  - snakemake-minimal=7
+  - python=3.10
+  - pysam
+  - dnaio
+  - bwa
+  - samtools
+  - cmake=3.27
+  - cxx-compiler
+  - seaborn
+  - minimap2
+  - isa-l
+  - pyyaml
+  - pyfaidx
+  - fastp
+  - gargammel
+  - numpy=1.26
+  - zlib
+  
