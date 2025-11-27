@@ -106,27 +106,27 @@ def parse_paired(fastq1_path: Path, fastq2_path: Path) -> List[Dict[str, any]]:
     return reads_data
 
 
-def write_output(reads_data: List[Dict[str, any]], output_path: Path):
+def output_bed(reads_data: List[Dict[str, any]], output_path: Path):
     delimiter = '\t' 
 
     with open(output_path, 'w') as f:
-        f.write(delimiter.join([
-            'read_id',
-            'reference_id',
-            'start',
-            'end',
-            'orientation',
-            'reference_class'
-        ]) + '\n')
+        # f.write(delimiter.join([
+        #     'reference_id',
+        #     'start',
+        #     'end',
+        #     'read_id'
+        #     'orientation',
+        #     'reference_class'
+        # ]) + '\n')
 
         for read in reads_data:
             f.write(delimiter.join([
-                str(read['read_id']),
                 str(read['reference_id']),
                 str(read['start']),
                 str(read['end']),
-                str(read['orientation']),
-                str(read['reference_class'])
+                str(read['read_id']),
+                "0",
+                str(read['orientation'])
             ]) + '\n')
 
 
@@ -200,7 +200,7 @@ Example usage:
 
     print(f"Writing output to {args.output}...", file=sys.stderr)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    write_output(reads_data, args.output)
+    output_bed(reads_data, args.output)
     print(f"Done! Total reads processed: {len(reads_data)}", file=sys.stderr)
 
     if reads_data:

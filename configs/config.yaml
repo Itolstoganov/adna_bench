@@ -1,15 +1,31 @@
 # Datasets to simulate or benchmark
-genomes:
-  - chr21
+# Each dataset can be specified as:
+# 1. Single instance with all parameters defined
+# 2. Range specification where parameters can be lists to create combinations
+
+datasets:
+  # Example single instance dataset
+  - name: "chr21_var3"
+    endogenous_genome: "chr21_chm13"
+    contaminant_genome: "chr21_chm13"
+    endogenous_variation: "var3"
+    bacterial_db: "k14"
+    read_length: 40
+    proportions: [0.7, 0.00, 0.3]  # [endogenous, contaminant, bacterial] 
+
+  # Example range specification 
+  # - name: "chr21_variations"
+  #   endogenous_genome: "chr21-chm13"
+  #   contaminant_genome: "chr21-chm1"
+  #   endogenous_variation: ["var1", "var3", "var4"]
+  #   bacterial_db: "k14"
+  #   read_length: [40, 60, 80]
+  #   proportions: [[0.6, 0.05, 0.35], [0.8, 0.05, 0.15]]  # Multiple proportion combinations
 
 # Gargammel simulation parameters
 num_reads: 100000
-read-len:
-  - 40
-  # - 75
 
 # Alignment parameters
-
 versions:
   - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
     color: "yellow"

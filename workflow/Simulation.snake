@@ -1,45 +1,147 @@
+from itertools import product
+
 configfile: "configs/config.yaml"
 
-DATASETS = config["genomes"]
 NUM_READS = config.get("num_reads", 100000)
-READ_LEN = config.get("read_len", 40)
 
 SCRIPTS = "workflow/scripts"
 
+VARIATION_SETTINGS = {
+    "var1": "",
+    "var2": "--snp-rate 0.0005 --small-indel-rate 0.00005 --max-small-indel-size 30",
+    "var3": "--snp-rate 0.001 --small-indel-rate 0.0001 --max-small-indel-size 50",
+    "var4": "--snp-rate 0.005 --small-indel-rate 0.0005 --max-small-indel-size 50",
+    "var5": "--snp-rate 0.005 --small-indel-rate 0.001 --max-small-indel-size 100",
+    "var6": "--snp-rate 0.05 --small-indel-rate 0.002 --max-small-indel-size 100",
+}
+
+def expand_datasets(dataset_configs):
+    """
+    Expand dataset configurations into individual dataset instances.
+    Handles both single instance and range specifications.
+
+    Returns a dict mapping dataset_id to dataset parameters.
+    """
+    expanded = {}
+
+    for ds in dataset_configs:
+        # Collect all parameter values (convert single values to lists)
+        endo_genome = ds.get("endogenous_genome")
+        cont_genome = ds.get("contaminant_genome")
+        bact_db = ds.get("bacterial_db")
+        proportions = ds.get("proportions")
+        if not (len(proportions) == 3):
+            raise ValueError(f"{proportions} should be 3 float values with sum 1")
+
+        endo_vars = ds.get("endogenous_variation")
+        if not isinstance(endo_vars, list):
+            endo_vars = [endo_vars]
+
+        read_lengths = ds.get("read_length")
+        if not isinstance(read_lengths, list):
+            read_lengths = [read_lengths]
+
+        for endo_var, read_len in product(endo_vars, read_lengths):
+            dataset_id = f"{endo_genome}_{cont_genome}_{bact_db}_{endo_var}_len{read_len}_0p7"
+
+            expanded[dataset_id] = {
+                "endogenous_genome": endo_genome,
+                "contaminant_genome": cont_genome, 
+                "endogenous_variation": endo_var,
+                "bacterial_db": bact_db,
+                "read_length": read_len,
+                "proportions": proportions,
+                "endogenous_prop": proportions[0],
+                "contaminant_prop": proportions[1],
+                "bacterial_prop": proportions[2],
+            }
+
+    return expanded
+
+# Expand all datasets from config
+DATASET_CONFIGS = expand_datasets(config.get("datasets", []))
+DATASET_IDS = list(DATASET_CONFIGS.keys())
+
 rule all:
     input:
-        expand("datasets/{dataset}/{read_len}/fastp/1.fq.gz", dataset=DATASETS, read_len=READ_LEN),
-        expand("datasets/{dataset}/{read_len}/fastp/2.fq.gz", dataset=DATASETS, read_len=READ_LEN),
-        expand("datasets/{dataset}/{read_len}/ground_truth.tsv", dataset=DATASETS, read_len=READ_LEN)
+        expand("datasets/{dataset_id}/fastp/1.fq.gz", dataset_id=DATASET_IDS),
+        expand("datasets/{dataset_id}/fastp/2.fq.gz", dataset_id=DATASET_IDS),
+        expand("datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS),
+        expand("datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
+
+
+rule simulate_genomes:
+    input:
+        ref="genomes/{genome}.fa"
+    
+
+rule mason_variator:
+    output:
+        vcf="genomes/{var}/{genome}.vcf"
+    input:
+        fasta="genomes/{genome}.fa",
+        fai="genomes/{genome}.fa.fai",
+    params:
+        variation_settings=lambda wildcards: VARIATION_SETTINGS[wildcards.var],
+        outdir="genomes/{var}"
+    shell:
+        """
+        mkdir -p {params.outdir}
+        if [ "{wildcards.var}" = "var1" ]; then
+            touch {output.vcf}
+        else
+            mason_variator -ir {input.fasta} {params.variation_settings} -ov {output.vcf}.tmp.vcf
+            mv -v {output.vcf}.tmp.vcf {output.vcf}
+        fi
+        """
+
+
+def get_dataset_param(wildcards, param_name):
+    """Retrieve a parameter value for a given dataset_id."""
+    dataset_id = wildcards.dataset_id
+    if dataset_id in DATASET_CONFIGS:
+        return DATASET_CONFIGS[dataset_id][param_name]
+    raise ValueError(f"Dataset {dataset_id} not found in DATASET_CONFIGS")
 
 
 rule gargammel_simulate:
     input:
-        dataset="datasets/{dataset}"
+        endo_genome=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_genome')}.fa",
+        cont_genome=lambda wc: f"genomes/{get_dataset_param(wc, 'contaminant_genome')}.fa",
+        bact_db=lambda wc: f"gargammel_data/{get_dataset_param(wc, 'bacterial_db')}"
     output:
-        s1="datasets/{dataset}/{read_len}/simulated_s1.fq.gz",
-        s2="datasets/{dataset}/{read_len}/simulated_s2.fq.gz"
+        s1="datasets/{dataset_id}/simulated_s1.fq.gz",
+        s2="datasets/{dataset_id}/simulated_s2.fq.gz"
     params:
         num_reads=NUM_READS,
-        outdir="datasets/{dataset}/{read_len}/simulated"
+        workdir=lambda wc: f"datasets/{wc.dataset_id}",
+        outprefix=lambda wc: f"datasets/{wc.dataset_id}/simulated",
+        read_length=lambda wc: get_dataset_param(wc, "read_length"),
+        proportions=lambda wc: ",".join(map(str, get_dataset_param(wc, "proportions")))
     conda:
         "envs/gargammel.yml"
     shell:
         """
-        gargammel -n {params.num_reads} --comp 0.6,0.05,0.35 -l {wildcards.read_len} \
-        -damage 0.03,0.4,0.01,0.3 -o {params.outdir} {input.dataset}
+        # TODO: Diploid support
+        mkdir -p {params.workdir}/endo
+        ln -sfr {input.endo_genome} {params.workdir}/endo/endo.1.fa
+        mkdir -p {params.workdir}/cont
+        ln -sfr {input.cont_genome} {params.workdir}/cont/cont.1.fa
+        ln -sfr {input.bact_db}/fasta {params.workdir}/bact
+        gargammel -n {params.num_reads} --comp {params.proportions} -l {params.read_length} \
+        -damage 0.03,0.4,0.01,0.3 -o {params.outprefix} {params.workdir}
         """
 
 
 rule fastp_process:
     input:
-        s1="datasets/{dataset}/{read_len}/simulated_s1.fq.gz",
-        s2="datasets/{dataset}/{read_len}/simulated_s2.fq.gz"
+        s1="datasets/{dataset_id}/simulated_s1.fq.gz",
+        s2="datasets/{dataset_id}/simulated_s2.fq.gz"
     output:
-        o1="datasets/{dataset}/{read_len}/fastp/1.fq.gz",
-        o2="datasets/{dataset}/{read_len}/fastp/2.fq.gz",
-        html="datasets/{dataset}/{read_len}/fastp/fastp.html",
-        json="datasets/{dataset}/{read_len}/fastp/fastp.json"
+        o1="datasets/{dataset_id}/fastp/1.fq.gz",
+        o2="datasets/{dataset_id}/fastp/2.fq.gz",
+        html="datasets/{dataset_id}/fastp/fastp.html",
+        json="datasets/{dataset_id}/fastp/fastp.json"
     threads: 4
     shell:
         """
@@ -48,17 +150,75 @@ rule fastp_process:
         --html {output.html} --json {output.json} \
         --thread {threads}
         """
-        
 
-rule parse_gt:
+
+rule parse_ground_truth:
     input:
-        r1="datasets/{dataset}/{read_len}/fastp/1.fq.gz",
-        r2="datasets/{dataset}/{read_len}/fastp/2.fq.gz"
+        r1="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2="datasets/{dataset_id}/fastp/2.fq.gz"
     output:
-        gt="datasets/{dataset}/{read_len}/ground_truth.tsv"
+        gt="datasets/{dataset_id}/endo_ground_truth.bed"
     params:
-        input_dir="datasets/{dataset}/{read_len}"
+        input_dir=lambda wc: f"datasets/{wc.dataset_id}"
     shell:
         """
         {SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} -o {output.gt}
+        """
+
+
+rule samtools_faidx:
+    output: "genomes/{genome}.fa.fai"
+    input: "genomes/{genome}.fa"
+    shell: "samtools faidx {input}"
+
+
+rule convert_vcf:
+    input: "genomes/{var}/{ref}.vcf"
+    output: 
+        vcf="genomes/{var}/{ref}-fixed.vcf.gz",
+        tbi="genomes/{var}/{ref}-fixed.vcf.gz.tbi"
+    params: 
+        tmp_out="genomes/{var}/{ref}-fixed.vcf"
+    shell: 
+        """
+        {SCRIPTS}/add_vcf_format.py -i {input} -o "{params.tmp_out}"
+        bcftools sort {params.tmp_out} | bgzip --stdout > {output.vcf}
+        tabix {output.vcf}
+        """
+
+
+rule ref_transform:
+    input:
+        fasta="genomes/{ref}.fa",
+        vcf="genomes/{var}/{ref}-fixed.vcf.gz",
+        tbi="genomes/{var}/{ref}-fixed.vcf.gz.tbi"
+    output:
+        fasta="genomes/{var}/{ref}.fa",
+        vci="genomes/{var}/{ref}.vci.gz"
+    params:
+        outprefix="genomes/{var}/{ref}",
+        outvci="genomes/{var}/{ref}.vci"
+    singularity:
+        "docker://churchilllab/g2gtools:3.0.0"
+    shell:
+        """
+        g2gtools vcf2vci --vci {params.outvci} --vcf {input.vcf} --fasta {input.fasta} --strain simulated -v
+        g2gtools patch --fasta {input.fasta} --vci {output.vci} --out {params.outprefix}.patched.fa
+        g2gtools transform --fasta {params.outprefix}.patched.fa --vci {output.vci} --out {output.fasta}
+        """
+
+rule gt_liftover:
+    input:
+        gt="datasets/{dataset_id}/endo_ground_truth.bed",
+        vci=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.vci.gz",
+        fasta=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.fa"
+    output:
+        gt="datasets/{dataset_id}/ref_ground_truth.bed",
+        fasta="datasets/{dataset_id}/ref.fa"
+    singularity:
+        "docker://churchilllab/g2gtools:3.0.0"
+    shell:
+        """
+        g2gtools convert --in {input.gt} --vci {input.vci} -f BED --out {output.gt}
+        ln -sfr {input.fasta} {output.fasta}
         """

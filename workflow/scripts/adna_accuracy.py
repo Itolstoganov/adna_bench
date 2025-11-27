@@ -81,7 +81,7 @@ def parse_gargammel_name(read_name: str):
     match = re.match(r'(.*):(\+|\-):(\d+):(\d+):(\d+)(a|b|c|d|e)(\d+)(.*)', read_name)
     if not match:
         raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
-
+    
     ref_name, orientation, start_pos, end_pos, read_len, read_origin, allele, _ = match.groups()
     return ref_name, start_pos, end_pos, read_origin
 
@@ -196,7 +196,7 @@ def get_iter_stats(fastq_path, predicted) -> Accuracy:
     correct_jaccard = 0.0
     correct_score = 0  # Same or better alignment score
 
-    score_threshold = 20
+    score_threshold = 50
     unscored = 0
 
     origin_count = {"b": 0, "c": 0, "e": 0}
