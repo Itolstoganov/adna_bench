@@ -72,6 +72,9 @@ set-resources:
   bwa_mem_single_end:
     mem_mb: 32000
 
+  bwa_aln:
+    mem_mb: 32000
+
   strobealign_paf_paired_end:
     mem_mb: 38000
 

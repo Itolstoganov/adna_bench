@@ -5,6 +5,9 @@ configfile: "configs/config.yaml"
 include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
+localrules:
+    plots, resources, accuracy_tables
+
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
 
