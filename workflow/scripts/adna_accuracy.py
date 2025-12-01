@@ -272,7 +272,12 @@ def get_iter_stats(gt_path, predicted) -> Accuracy:
         # print(truth)
         # print(p)
         if truth.name == p.reference_name:
-            jacc = jaccard_overlap(p.reference_start, p.reference_end, truth.start, truth.end)
+            try:
+                jacc = jaccard_overlap(p.reference_start, p.reference_end, truth.start, truth.end)
+            except:
+                print(f"Malformed ground truth interval for read {p.query_name}", file=sys.stderr)
+                print(p.reference_start, p.reference_end, file=sys.stderr)
+                print(truth, file=sys.stderr)
             correct_jaccard += jacc
             if overlap(p.reference_start, p.reference_end, truth.start, truth.end):
                 correct += 1
