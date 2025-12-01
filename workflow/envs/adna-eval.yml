@@ -22,4 +22,6 @@ dependencies:
   - gargammel
   - numpy=1.26
   - zlib
+  - singularity
+  - bcftools
   

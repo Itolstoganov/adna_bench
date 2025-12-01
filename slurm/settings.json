@@ -1,0 +1,5 @@
+{
+    "SBATCH_DEFAULTS": "--account=naiss2025-22-285 --partition=shared",
+    "CLUSTER_NAME": "",
+    "CLUSTER_CONFIG": ""
+}

@@ -66,8 +66,6 @@ rule gargammel_simulate:
         outprefix=lambda wc: f"datasets/{wc.dataset_id}/simulated",
         read_length=lambda wc: get_dataset_param(wc, "read_length"),
         proportions=lambda wc: ",".join(map(str, get_dataset_param(wc, "proportions")))
-    conda:
-        "envs/gargammel.yml"
     shell:
         """
         # TODO: Diploid support
@@ -130,7 +128,7 @@ rule convert_vcf:
     shell: 
         """
         {SCRIPTS}/add_vcf_format.py -i {input} -o "{params.tmp_out}"
-        bcftools sort {params.tmp_out} | bgzip --stdout > {output.vcf}
+        bcftools sort -m 2G {params.tmp_out} | bgzip --stdout > {output.vcf}
         tabix {output.vcf}
         """
 

@@ -1,0 +1,88 @@
+# SLURM profile to be used with 'snakemake --profile=slurm'
+
+cluster-sidecar: "slurm-sidecar.py"
+cluster-cancel: "scancel"
+restart-times: "0"
+jobscript: "slurm-jobscript.sh"
+cluster: "slurm-submit.py"
+cluster-status: "slurm-status.py"
+max-jobs-per-second: "10"
+max-status-checks-per-second: "10"
+local-cores: 1
+latency-wait: "5"
+use-conda: "True"
+use-singularity: "False"
+jobs: "500"
+printshellcmds: "True"
+
+default-resources:
+  runtime: 120
+  mem_mb: 2000
+  # account and partition should be specified in in settings.json
+
+set-resources:
+  single_end_truth:
+    runtime: 10
+    mem_mb: 2000
+
+  mason_variator:
+    mem_mb: 16000
+    runtime: 720
+
+  mason_simulator:
+    mem_mb: 32000
+    runtime: 2880
+
+  sim0:
+    runtime: 600
+
+  ccs:
+    mem_mb: 32000
+
+  ref_transform:
+    mem_mb: 16000
+    runtime: 240
+
+  gt_liftover:
+    mem_mb: 16000
+    runtime: 240
+
+  convert_vcf:
+    mem_mb: 4000
+    runtime: 240
+
+  bwa_index:
+    mem_mb: 8000
+    runtime: 360
+
+  compile_strobealign:
+    mem_mb: 8000
+
+  bam_accuracy:
+    mem_mb: 2000
+    runtime: 30
+
+  paf_accuracy:
+    mem_mb: 2000
+    runtime: 30
+
+  bwa_mem_paired_end:
+    mem_mb: 32000
+
+  bwa_mem_single_end:
+    mem_mb: 32000
+
+  strobealign_paf_paired_end:
+    mem_mb: 38000
+
+  strobealign_paf_single_end:
+    mem_mb: 38000
+
+  strobealign_paired_end:
+    mem_mb: 38000
+
+  strobealign_single_end:
+    mem_mb: 38000
+
+#set-threads:
+#  my-example-rule: 10
