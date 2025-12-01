@@ -54,19 +54,19 @@ rule bwa_index:
 # Fix runtime measurements
 rule bwa_aln:
     output:
-        bam="runs/bwaaln/{genome}-{read_length}/pe.bam",
-        sai1=temp("runs/bwaaln/{genome}-{read_length}/1.sai"),
-        sai2=temp("runs/bwaaln/{genome}-{read_length}/2.sai")
+        bam="runs/bwaaln/{dataset_id}/pe.bam",
+        sai1=temp("runs/bwaaln/{dataset_id}/1.sai"),
+        sai2=temp("runs/bwaaln/{dataset_id}/2.sai")
     input:
-        fasta="genomes/{genome}.fa",
-        index="genomes/{genome}.fa.bwt",
-        r1_fastq="datasets/{genome}/{read_length}/fastp/1.fq.gz",
-        r2_fastq="datasets/{genome}/{read_length}/fastp/2.fq.gz"
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz"
     params:
         opt="-n 0.01 -o 2 -l 1024"
     threads: 8
     log:
-        "runs/bwaaln/{genome}-{read_length}/pe.bam.log"
+        "runs/bwaaln/{dataset_id}/pe.bam.log"
     shell:
         # "cat {input} > /dev/null; "
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
@@ -98,17 +98,17 @@ rule compile_strobealign:
 
 rule strobealign_paired_end:
     output:
-        bam="runs/strobealign-{program}/{genome}-{read_length}/pe.bam"
+        bam="runs/strobealign-{program}/{dataset_id}/pe.bam"
     input:
         binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
-        fasta="genomes/{genome}.fa",
-        r1_fastq="datasets/{genome}/{read_length}/fastp/1.fq.gz",
-        r2_fastq="datasets/{genome}/{read_length}/fastp/2.fq.gz",
+        fasta="datasets/{dataset_id}/ref.fa",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
     params:
         extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
     threads: 8
     log:
-        "runs/strobealign-{program}/{genome}-{read_length}/pe.bam.log"
+        "runs/strobealign-{program}/{dataset_id}/pe.bam.log"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
@@ -120,16 +120,16 @@ rule strobealign_paired_end:
 
 # rule strobealign_single_end:
 #     output:
-#         bam=temp("runs/strobealign-{program}/{dataset}-{genome}-{read_length}/se.bam")
+#         bam=temp("runs/strobealign-{program}/{dataset}-{dataset_id}/se.bam")
 #     input:
 #         binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
 #         fasta="genomes/{genome}.fa",
-#         r1_fastq="datasets/{dataset}/{genome}-{read_length}/1.fastq.gz",
+#         r1_fastq="datasets/{dataset}/{dataset_id}/1.fastq.gz",
 #     params:
 #         extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
 #     threads: 8
 #     log:
-#         "runs/strobealign-{program}/{dataset}-{genome}-{read_length}/se.bam.log"
+#         "runs/strobealign-{program}/{dataset}-{dataset_id}/se.bam.log"
 #     shell:
 #         "cat {input} > /dev/null; "
 #         "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
@@ -137,27 +137,6 @@ rule strobealign_paired_end:
 #         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
 #         "\n mv -v {output.bam}.tmp.bam {output.bam}"
 #         "\n mv -v {log}.tmp {log}"
-
-
-rule resources:
-    output:
-        csv="csv/{prog}/{genome}-{read_length}/{ends}.{bampaf}.resources.csv"
-    input:
-        log="runs/{prog}/{genome}-{read_length}/{ends}.{bampaf}.log",
-    params:
-        typ=lambda wildcards: "map" if wildcards.bampaf == "paf" else "align"
-    shell:
-        """
-        echo -n {wildcards.prog},{params.typ},{wildcards.genome},{wildcards.ends},{wildcards.read_length}, > {output.csv}.tmp
-        user_time=$(awk '/User time/ {{print $NF}}' {input.log})
-        memory=$(awk '/Maximum resident/ {{print $NF/1048576}}' {input.log})
-        indexing_time=$(awk '/Total time indexing:/ {{print $4}}' {input.log})
-        mapping_time=$(awk '/Total time mapping:/ {{print $4}}' {input.log})
-        if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([1-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
-        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{print total-t}}' {input.log}); fi
-        echo ,${{mapping_time}},${{memory}} >> {output}.tmp
-        mv {output.csv}.tmp {output.csv}
-        """
         
 
 # def csvs(wildcards):

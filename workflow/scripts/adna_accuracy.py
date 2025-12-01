@@ -33,6 +33,9 @@ class ReferenceInterval:
     start: int
     end: int
 
+    def __iter__(self):
+        return iter((self.name, self.origin, self.start, self.end))
+
 
 @dataclass
 class AccuracyPercentages:
@@ -46,7 +49,7 @@ class AccuracyPercentages:
     def row(self):
         return (
             self.aligned,
-            # self.correct,
+            self.correct,
             self.overmapped_bact,
             self.overmapped_cont
             # self.unaligned,
@@ -70,20 +73,23 @@ class Accuracy:
         return AccuracyPercentages(
             aligned=100 * self.aligned / self.origin_count["e"],
             correct=100 * self.correct / self.origin_count["e"],
-            overmapped_bact=100 * self.overmapped_bact / self.origin_count["b"],
-            overmapped_cont=100 * self.overmapped_cont / self.origin_count["c"],
+            overmapped_bact=100 * self.overmapped_bact / self.origin_count["b"] if self.origin_count["b"] > 0 else 0,
+            overmapped_cont=100 * self.overmapped_cont / self.origin_count["c"] if self.origin_count["c"] > 0 else 0,
             jaccard_correct=round(100 * self.jaccard_correct / self.n, 5),
             score_correct=100 * self.score_correct / self.n if self.score_correct is not None else "",
         )
     
 
 def parse_gargammel_name(read_name: str):
-    match = re.match(r'(.*):(\+|\-):(\d+):(\d+):(\d+)(a|b|c|d|e)(\d+)(.*)', read_name)
+    ref_name, orientation, start_pos, end_pos, origin_string = read_name.split(":")
+    match = re.match(r'(\d+)(a|b|c|d|e)(.*)', origin_string)
+
     if not match:
+        print(origin_string)
         raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
     
-    ref_name, orientation, start_pos, end_pos, read_len, read_origin, allele, _ = match.groups()
-    return ref_name, start_pos, end_pos, read_origin
+    read_len, read_origin, allele = match.groups()
+    return ref_name, int(start_pos), int(end_pos), read_origin
 
 
 def read_alignments(bam_path):
@@ -180,13 +186,45 @@ def recompute_alignment_score(segment, scores) -> int:
     return score
 
 
+def overlap(q_a, q_b, p_a, p_b):
+    assert q_a <= q_b and p_a <= p_b
+    # if (q_a == q_b) or (p_a == p_b):
+    #     print("Cigar bug")
+    return (
+        (p_a <= q_a <= p_b)
+        or (p_a <= q_b <= p_b)
+        or (q_a <= p_a <= q_b)
+        or (q_a <= p_b <= q_b)
+    )
+
+
+def jaccard_overlap(a_start, a_end, b_start, b_end):
+    assert a_start < a_end
+    assert b_start < b_end
+
+    intersect = min(a_end, b_end) - max(a_start, b_start)
+    if intersect < 0:
+        return 0
+    union = max(a_end, b_end) - min(a_start, b_start)
+    result = intersect / union
+    assert 0 <= result <= 1.0
+    return result
+
+
+assert jaccard_overlap(5, 10, 5, 10) == 1
+assert jaccard_overlap(10, 20, 20, 30) == 0
+assert jaccard_overlap(20, 30, 10, 20) == 0
+assert jaccard_overlap(0, 4, 1, 3) == 0.5
+assert jaccard_overlap(1, 3, 0, 4) == 0.5
+
+
 def filter_bam(alignment_file):
     for record in alignment_file:
         if not record.is_supplementary and not record.is_secondary:
             yield record
             
 
-def get_iter_stats(fastq_path, predicted) -> Accuracy:
+def get_iter_stats(gt_path, predicted) -> Accuracy:
     n = 0
     unaligned = 0
     nr_aligned = 0
@@ -196,52 +234,48 @@ def get_iter_stats(fastq_path, predicted) -> Accuracy:
     correct_jaccard = 0.0
     correct_score = 0  # Same or better alignment score
 
-    score_threshold = 50
+    score_threshold = 40
     unscored = 0
 
+    ground_truth = {}
+
     origin_count = {"b": 0, "c": 0, "e": 0}
-    with xopen(fastq_path) as fastq_handle:
-        for read in SeqIO.parse(fastq_handle, "fastq"):
-            _, _, _, read_origin = parse_gargammel_name(read.name)
+    with open(gt_path) as gt_handle:
+        for line in gt_handle:
+            ref_name, start_pos, end_pos, read_name, _, orientation = line.strip().split()
+            _, _, _, read_origin = parse_gargammel_name(read_name)
             origin_count[read_origin] += 2
-    # iterator = zip_longest(SeqIO.parse(truth, "fastq"), filter_bam(predicted))
-    # print(origin_count)
+            ground_truth[read_name] = ReferenceInterval(ref_name, read_origin, int(start_pos), int(end_pos))
 
     for p in filter_bam(predicted):
-
-        ref_name, start_pos, end_pos, read_origin = parse_gargammel_name(p.query_name)
-
         n += 1
+        if p.query_name not in ground_truth:
+            print(f"{p.query_name} is not present in ground truth")
+        truth = ground_truth[p.query_name]
+        read_origin = truth.origin
         try:
             score = p.get_tag("AS") if p.has_tag("AS") else recompute_alignment_score(p, Scores)
         except:
             unscored += 1
             score = score_threshold
-        if not p.is_unmapped and score >= score_threshold:  # TODO and not p.is_unmapped:
-            # print(p.query_name)
+
+        if not p.is_unmapped and score >= score_threshold:
             if read_origin == "b":
                 overmapped_bact += 1
             elif read_origin == "c":
                 overmapped_cont += 1
-            else:
+            elif read_origin == "e":
                 nr_aligned += 1
-        # if t.is_unmapped and p.is_unmapped:
-        #     continue
-
-        is_correct = False
-        if ref_name == p.reference_name:
-            # TODO obtain true coordinates for variated genomes
-            correct += 1
-            correct_jaccard += 1
-        #     jacc = jaccard_overlap(
-        #         p.reference_start, p.reference_end, t.reference_start, t.reference_end
-        #     )
-        #     correct_jaccard += jacc
-        #     if overlap(
-        #         p.reference_start, p.reference_end, t.reference_start, t.reference_end
-        #     ):
-        #         correct += 1
-        #         is_correct = True
+        else:
+            continue
+    
+        # print(truth)
+        # print(p)
+        if truth.name == p.reference_name:
+            jacc = jaccard_overlap(p.reference_start, p.reference_end, truth.start, truth.end)
+            correct_jaccard += jacc
+            if overlap(p.reference_start, p.reference_end, truth.start, truth.end):
+                correct += 1
 
         # if not is_correct:
         #     if recompute_predicted_score:
@@ -265,7 +299,7 @@ def get_iter_stats(fastq_path, predicted) -> Accuracy:
     )
 
 def measure_accuracy(
-    fastq: Path,
+    ground_truth: Path,
     predicted: Path
     # outfile: Path = None,
     # skip_r2: bool = False,
@@ -280,7 +314,7 @@ def measure_accuracy(
         #         predicted = pick_random_primary_single_end_iter(predicted)
         #     else:
         #         predicted = pick_random_primary_paired_end_iter(predicted)
-        result = get_iter_stats(fastq, predicted)
+        result = get_iter_stats(ground_truth, predicted)
 
     return result
 
@@ -295,7 +329,7 @@ if __name__ == "__main__":
     parser.add_argument("--recompute-score", default=False, action="store_true", help="Recompute score in *predicted* BAM. Default: Use score from AS tag")
     parser.add_argument("--multiple-primary", default=False, action="store_true", help="Allow multiple primary alignments (violates SAM specification) and pick one randomly")
     parser.add_argument("--synthesize-unmapped", default=False, action="store_true", help="If an alignment is missing from predicted, assume the read is unmapped")
-    parser.add_argument("--fastq", type=Path, help="Path to gargammel simulated reads")
+    parser.add_argument("--ground-truth", type=Path, help="Path to ground truth alignments (in .bed format)")
     parser.add_argument("--predicted", "--predicted_sam", "--predicted_paf", type=Path, help="Predicted SAM/BAM/PAF")
     # parser.add_argument("--paf", dest="force_paf", action="store_true", help="Assume PAF input for predicted (usually autodetected, only needed if reading PAF from stdin)")
     parser.add_argument("--outfile", help="Path to file")
@@ -305,7 +339,7 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit()
 
-    accuracy = measure_accuracy(args.fastq, args.predicted)
+    accuracy = measure_accuracy(args.ground_truth, args.predicted)
 
     # print("\% Mapped endogenous reads\t\% Mapped bacterial reads\t\% Mapped contaminated reads")
     print(*accuracy.percentages().row(), sep="\t")

@@ -1,15 +1,15 @@
+from itertools import product
+
 configfile: "configs/config.yaml"
 
-module alignment:
-    snakefile: "rules/alignment.smk"
-
 include: "rules/alignment.smk"
+include: "rules/pipeline.smk"
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
-# DATASETS = config["datasets"]
-GENOMES = config["genomes"]
-READ_LENGTHS = config["read-len"]
+
+DATASET_CONFIGS = expand_datasets(config.get("datasets", []))
+DATASET_IDS = list(DATASET_CONFIGS.keys())
 
 VERSIONS = {}
 for version in config.get("versions", []):
@@ -32,26 +32,26 @@ PLOTS = ("accuracy", "aligned", "time", "memory")
 
 rule final:
     input:
-        expand("csv/{prog}/{genome}-{read_length}/pe.bam.resources.csv", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
-        # expand("runs/{prog}/{genome}-{read_length}/pe.bam", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
-        expand("result/{genome}-{read_length}/accuracy_table.tsv", genome=GENOMES, read_length=READ_LENGTHS)
+        expand("csv/{prog}/{dataset_id}/pe.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
+        # expand("runs/{prog}/{dataset_id}/pe.bam", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
+        expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS)
 
 
 rule run_adna_accuracy:
     output:
-        "csv/{prog}/{genome}-{read_length}/accuracy.tsv"
+        "csv/{prog}/{dataset_id}/accuracy.tsv"
     input:
-        fastq="datasets/{genome}/{read_length}/fastp/1.fq.gz",
-        bam="runs/{prog}/{genome}-{read_length}/pe.bam"
+        gt="datasets/{dataset_id}/ref_ground_truth.bed",
+        bam="runs/{prog}/{dataset_id}/pe.bam"
     shell:
-        "python workflow/scripts/adna_accuracy.py --fastq {input.fastq} --predicted {input.bam} > {output}"
+        "python workflow/scripts/adna_accuracy.py --ground-truth {input.gt} --predicted {input.bam} > {output}"
 
 
 rule accuracy_tables:
     output:
-        "result/{genome}-{read_length}/accuracy_table.tsv"
+        "result/{dataset_id}/accuracy_table.tsv"
     input:
-        expand("csv/{prog}/{{genome}}-{{read_length}}/accuracy.tsv", prog=PROGRAMS)
+        expand("csv/{prog}/{{dataset_id}}/accuracy.tsv", prog=PROGRAMS)
     params:
         programs=PROGRAMS,
         config=config
@@ -71,6 +71,7 @@ rule accuracy_tables:
             writer.writerow([
                 "Tool",
                 "% Mapped endogenous reads",
+                "% Accuracy (endogenous only)",
                 "% Mapped bacterial reads",
                 "% Mapped contaminated reads"
             ])
@@ -80,3 +81,26 @@ rule accuracy_tables:
                 with open(input_file) as f:
                     values = f.read().strip().split('\t')
                     writer.writerow([tool_name] + values)
+
+
+rule resources:
+    output:
+        csv="csv/{prog}/{dataset_id}/{ends}.{bampaf}.resources.csv"
+    input:
+        log="runs/{prog}/{dataset_id}/{ends}.{bampaf}.log",
+    params:
+        typ=lambda wildcards: "map" if wildcards.bampaf == "paf" else "align",
+        genome=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_genome')}",
+        read_len=lambda wc: f"genomes/{get_dataset_param(wc, 'read_length')}"
+    shell:
+        """
+        echo -n {wildcards.prog},{params.typ},{params.genome},{wildcards.ends},{params.read_len}, > {output.csv}.tmp
+        user_time=$(awk '/User time/ {{print $NF}}' {input.log})
+        memory=$(awk '/Maximum resident/ {{print $NF/1048576}}' {input.log})
+        indexing_time=$(awk '/Total time indexing:/ {{print $4}}' {input.log})
+        mapping_time=$(awk '/Total time mapping:/ {{print $4}}' {input.log})
+        if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([1-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
+        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{print total-t}}' {input.log}); fi
+        echo ,${{mapping_time}},${{memory}} >> {output}.tmp
+        mv {output.csv}.tmp {output.csv}
+        """
