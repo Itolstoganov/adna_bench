@@ -52,7 +52,7 @@ rule bwa_index:
         "bwa index {input}"
 
 # Fix runtime measurements
-rule bwa_aln:
+rule bwa_aln_paired_end:
     output:
         bam="runs/bwaaln/{dataset_id}/pe.bam",
         sai1=temp("runs/bwaaln/{dataset_id}/1.sai"),
@@ -72,6 +72,70 @@ rule bwa_aln:
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r2_fastq} > {output.sai2} 2> {log}.tmp"
         "\n bwa sampe {input.fasta} {output.sai1} {output.sai2} {input.r1_fastq} {input.r2_fastq}"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule bwa_aln_single_end:
+    output:
+        bam="runs/bwaaln/{dataset_id}/se.bam",
+        sai1=temp("runs/bwaaln/{dataset_id}/1.sai")
+        # sai2=temp("runs/bwaaln/{dataset_id}/2.sai")
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+    params:
+        opt="-n 0.01 -o 2 -l 1024"
+    threads: 8
+    log:
+        "runs/bwaaln/{dataset_id}/se.bam.log"
+    shell:
+        # "cat {input} > /dev/null; "
+        "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
+        # "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r2_fastq} > {output.sai2} 2> {log}.tmp"
+        "\n bwa sampe {input.fasta} {output.sai1} {input.r1_fastq} "
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule bwa_mem_paired_end:
+    output:
+        bam="runs/bwamem/{dataset_id}/pe.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+    threads: 8
+    log:
+        "runs/bwamem/{dataset_id}/pe.bam.log"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bwa mem -t {threads} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule bwa_mem_single_end:
+    output:
+        bam="runs/bwamem/{dataset_id}/se.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+    threads: 8
+    log:
+        "runs/bwamem/{dataset_id}/se.bam.log"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bwa mem -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
@@ -112,6 +176,27 @@ rule strobealign_paired_end:
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule strobealign_single_end:
+    output:
+        bam="runs/strobealign-{program}/{dataset_id}/se.bam"
+    input:
+        binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
+        fasta="datasets/{dataset_id}/ref.fa",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+    params:
+        extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
+    threads: 8
+    log:
+        "runs/strobealign-{program}/{dataset_id}/se.bam.log"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
