@@ -244,7 +244,7 @@ def get_iter_stats(gt_path, predicted) -> Accuracy:
         for line in gt_handle:
             ref_name, start_pos, end_pos, read_name, _, orientation = line.strip().split()
             _, _, _, read_origin = parse_gargammel_name(read_name)
-            origin_count[read_origin] += 2
+            origin_count[read_origin] += 1
             ground_truth[read_name] = ReferenceInterval(ref_name, read_origin, int(start_pos), int(end_pos))
 
     for p in filter_bam(predicted):
@@ -261,6 +261,7 @@ def get_iter_stats(gt_path, predicted) -> Accuracy:
 
         if not p.is_unmapped and score >= score_threshold:
             if read_origin == "b":
+                # print(read_name)
                 overmapped_bact += 1
             elif read_origin == "c":
                 overmapped_cont += 1

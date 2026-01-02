@@ -5,22 +5,23 @@
 
 datasets:
   # Example single instance dataset
-  - name: "chr21_var3"
-    endogenous_genome: "chr21_chm13"
-    contaminant_genome: "chr21_chm13"
-    endogenous_variation: "var3"
-    bacterial_db: "k14"
-    read_length: 40
-    proportions: [0.7, 0.00, 0.3]  # [endogenous, contaminant, bacterial] 
+  # - name: "chr21_var3"
+  #   endogenous_genome: "chr21_chm13"
+  #   contaminant_genome: "chr21_chm13"
+  #   endogenous_variation: "var3"
+  #   bacterial_db: "k14"
+  #   read_length: 40
+  #   proportions: [0.7, 0.00, 0.3]  # [endogenous, contaminant, bacterial] 
 
   # Example range specification 
-  # - name: "chr21_variations"
-  #   endogenous_genome: "chr21-chm13"
-  #   contaminant_genome: "chr21-chm1"
-  #   endogenous_variation: ["var1", "var3", "var4"]
-  #   bacterial_db: "k14"
-  #   read_length: [40, 60, 80]
-  #   proportions: [[0.6, 0.05, 0.35], [0.8, 0.05, 0.15]]  # Multiple proportion combinations
+  - name: "chm13_variations"
+    endogenous_genome: "CHM13"
+    contaminant_genome: "CHM13"
+    endogenous_variation: ["var3", "var4"]
+    bacterial_db: "k14"
+    read_length: [40]
+    proportions: [0.7, 0.00, 0.3]
+    # proportions: [[0.6, 0.05, 0.35], [0.8, 0.05, 0.15]]  # Multiple proportion combinations
 
 # Gargammel simulation parameters
 num_reads: 100000
@@ -37,12 +38,14 @@ versions:
     name: "strobealign main (15e4318)"
     arguments: "--mcs=always -S 0.95 -r 30 -k 12"
 
-ends:
- - se
-
 programs:
  - bwaaln
  - bwamem
 #  - minimap2
 #  - minimapv218
 #  - xmapper
+
+
+ends:
+#  - pe
+ - se

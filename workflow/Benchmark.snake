@@ -45,7 +45,7 @@ rule run_adna_accuracy:
         "csv/{prog}/{dataset_id}/accuracy.tsv"
     input:
         gt="datasets/{dataset_id}/ref_ground_truth.bed",
-        bam="runs/{prog}/{dataset_id}/pe.bam"
+        bam="runs/{prog}/{dataset_id}/se.bam"
     shell:
         "python workflow/scripts/adna_accuracy.py --ground-truth {input.gt} --predicted {input.bam} > {output}"
 
