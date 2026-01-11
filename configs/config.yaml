@@ -26,7 +26,7 @@ datasets:
 num_reads: 100000
 
 # Accuracy evaluation parameters
-score_thresholds: [25, 30, 35, 40, 45]
+score_thresholds: [25, 30, 35, 40]
 
 # Alignment parameters
 versions:

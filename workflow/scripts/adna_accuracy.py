@@ -19,6 +19,11 @@ from xopen import xopen
 
 READ_ORIGIN_DICT = {'b': "bact", 'c': "cont", 'e': "endo"}
 
+CIGAR_MATCH = 0  # M
+CIGAR_INSERTION = 1  # I
+CIGAR_DELETION = 2  # D
+CIGAR_SOFTCLIP = 4  # S
+
 class Scores:
     match = 2
     mismatch = 8
@@ -178,7 +183,6 @@ def recompute_alignment_score(segment, scores) -> int:
     # alignment.
     # - The numbers in the MD tag give us the number of matches
     # - The letters in the MD tag give us the number of mismatches
-
     for item in md:
         if isinstance(item, int):
             # Match
@@ -199,7 +203,6 @@ def recompute_alignment_score(segment, scores) -> int:
             score += scores.end_bonus
         if cigartuples[-1][0] != CIGAR_SOFTCLIP:
             score += scores.end_bonus
-
     return score
 
 

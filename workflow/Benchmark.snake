@@ -33,11 +33,14 @@ if config["programs"]:
 PLOTS = ("accuracy", "aligned", "time", "memory")
 
 
+PLOT_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
+SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
+
 rule final:
     input:
         expand("csv/{prog}/{dataset_id}/pe.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
-        # expand("runs/{prog}/{dataset_id}/pe.bam", prog=PROGRAMS, genome=GENOMES, read_length=READ_LENGTHS),
-        expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS)
+        expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS)
 
 
 rule run_adna_accuracy:
@@ -46,8 +49,10 @@ rule run_adna_accuracy:
     input:
         gt="datasets/{dataset_id}/ref_ground_truth.bed",
         bam="runs/{prog}/{dataset_id}/se.bam"
+    params:
+        thresholds=" ".join(str(t) for t in SCORE_THRESHOLDS)
     shell:
-        "python workflow/scripts/adna_accuracy.py --ground-truth {input.gt} --predicted {input.bam} > {output}"
+        "python workflow/scripts/adna_accuracy.py --ground-truth {input.gt} --predicted {input.bam} --score-thresholds {params.thresholds} > {output}"
 
 
 rule accuracy_tables:
@@ -86,6 +91,15 @@ rule accuracy_tables:
                     for line in f:
                         values = line.strip().split('\t')
                         writer.writerow([tool_name] + values)
+
+
+rule plots:
+    output:
+        expand("result/{{dataset_id}}/plots/{metric}.png", metric=PLOT_METRICS)
+    input:
+        "result/{dataset_id}/accuracy_table.tsv"
+    shell:
+        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots"
 
 
 rule resources:

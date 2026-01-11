@@ -8,7 +8,7 @@ datasets:
     proportions: [0.7, 0.0, 0.3]
 
 num_reads: 5000
-score_thresholds: [25, 30, 35, 40, 45]
+score_thresholds: [25, 30, 35, 40]
 
 versions:
   - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
