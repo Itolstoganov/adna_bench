@@ -25,6 +25,9 @@ datasets:
 # Gargammel simulation parameters
 num_reads: 100000
 
+# Accuracy evaluation parameters
+score_thresholds: [25, 30, 35, 40, 45]
+
 # Alignment parameters
 versions:
   - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"

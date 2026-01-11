@@ -56,7 +56,7 @@ class AccuracyPercentages:
             # self.jaccard_correct,
             # self.score_correct if self.score_correct is not None else "",
         )
-    
+
 
 @dataclass
 class Accuracy:
@@ -78,6 +78,23 @@ class Accuracy:
             jaccard_correct=round(100 * self.jaccard_correct / self.n, 5),
             score_correct=100 * self.score_correct / self.n if self.score_correct is not None else "",
         )
+
+
+@dataclass
+class AccuracyResults:
+    thresholds: List[int]
+    results: Dict[int, Accuracy]
+
+    def rows(self):
+        for threshold in self.thresholds:
+            yield (threshold, *self.results[threshold].percentages().row())
+
+    def to_tsv(self):
+        lines = []
+        for threshold in self.thresholds:
+            row = [str(threshold)] + [str(x) for x in self.results[threshold].percentages().row()]
+            lines.append('\t'.join(row))
+        return '\n'.join(lines)
     
 
 def parse_gargammel_name(read_name: str):
@@ -224,22 +241,34 @@ def filter_bam(alignment_file):
             yield record
             
 
-def get_iter_stats(gt_path, predicted) -> Accuracy:
-    n = 0
-    unaligned = 0
-    nr_aligned = 0
-    overmapped_bact = 0
-    overmapped_cont = 0
-    correct = 0
-    correct_jaccard = 0.0
-    correct_score = 0  # Same or better alignment score
+def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
+    """
+    Compute accuracy statistics for multiple score thresholds in a single pass.
 
-    score_threshold = 40
+    Args:
+        gt_path: Path to ground truth BED file
+        predicted: BAM file iterator
+        score_thresholds: List of score thresholds to evaluate
+
+    Returns:
+        AccuracyResults object with stats for each threshold
+    """
+    stats = {}
+    for threshold in score_thresholds:
+        stats[threshold] = {
+            'n': 0,
+            'nr_aligned': 0,
+            'overmapped_bact': 0,
+            'overmapped_cont': 0,
+            'correct': 0,
+            'correct_jaccard': 0.0,
+            'correct_score': 0
+        }
+
     unscored = 0
-
     ground_truth = {}
-
     origin_count = {"b": 0, "c": 0, "e": 0}
+
     with open(gt_path) as gt_handle:
         for line in gt_handle:
             ref_name, start_pos, end_pos, read_name, _, orientation = line.strip().split()
@@ -248,79 +277,68 @@ def get_iter_stats(gt_path, predicted) -> Accuracy:
             ground_truth[read_name] = ReferenceInterval(ref_name, read_origin, int(start_pos), int(end_pos))
 
     for p in filter_bam(predicted):
-        n += 1
         if p.query_name not in ground_truth:
             print(f"{p.query_name} is not present in ground truth")
+            continue
+
         truth = ground_truth[p.query_name]
         read_origin = truth.origin
+
         try:
             score = p.get_tag("AS") if p.has_tag("AS") else recompute_alignment_score(p, Scores)
         except:
             unscored += 1
-            score = score_threshold
+            score = min(score_thresholds) - 1  
 
-        if not p.is_unmapped and score >= score_threshold:
-            if read_origin == "b":
-                # print(read_name)
-                overmapped_bact += 1
-            elif read_origin == "c":
-                overmapped_cont += 1
-            elif read_origin == "e":
-                nr_aligned += 1
-        else:
-            continue
-    
-        # print(truth)
-        # print(p)
-        if truth.name == p.reference_name:
+        jacc = 0.0
+        is_overlap = False
+        if not p.is_unmapped and truth.name == p.reference_name:
             try:
                 jacc = jaccard_overlap(p.reference_start, p.reference_end, truth.start, truth.end)
+                is_overlap = overlap(p.reference_start, p.reference_end, truth.start, truth.end)
             except:
                 print(f"Malformed ground truth interval for read {p.query_name}", file=sys.stderr)
                 print(p.reference_start, p.reference_end, file=sys.stderr)
                 print(truth, file=sys.stderr)
-            correct_jaccard += jacc
-            if overlap(p.reference_start, p.reference_end, truth.start, truth.end):
-                correct += 1
 
-        # if not is_correct:
-        #     if recompute_predicted_score:
-        #         predicted_score = recompute_alignment_score(p, Scores)
-        #     else:
-        #         predicted_score = p.get_tag("AS")
-        #     truth_score = recompute_alignment_score(t, Scores)
-        #     # print(f"true: {t.reference_name} {t.reference_start} {t.cigarstring} AS:{truth_score}  -- actual: {p.reference_name} {p.reference_start} {p.cigarstring} AS:{predicted_score}")
-        #     correct_score += predicted_score >= truth_score
+        for threshold in score_thresholds:
+            stats[threshold]['n'] += 1
 
-    # print(f"{unscored} alignments without a score")
-    return Accuracy(
-        n=n,
-        aligned=nr_aligned,
-        correct=correct,
-        jaccard_correct=correct_jaccard,
-        score_correct=(correct_score + correct),
-        overmapped_bact=overmapped_bact,
-        overmapped_cont=overmapped_cont,
-        origin_count=origin_count
-    )
+            if not p.is_unmapped and score >= threshold:
+                if read_origin == "b":
+                    stats[threshold]['overmapped_bact'] += 1
+                elif read_origin == "c":
+                    stats[threshold]['overmapped_cont'] += 1
+                elif read_origin == "e":
+                    stats[threshold]['nr_aligned'] += 1
+
+                    if is_overlap:
+                        stats[threshold]['correct'] += 1
+                    stats[threshold]['correct_jaccard'] += jacc
+                
+    results = {}
+    for threshold in score_thresholds:
+        s = stats[threshold]
+        results[threshold] = Accuracy(
+            n=s['n'],
+            aligned=s['nr_aligned'],
+            correct=s['correct'],
+            jaccard_correct=s['correct_jaccard'],
+            score_correct=(s['correct_score'] + s['correct']),
+            overmapped_bact=s['overmapped_bact'],
+            overmapped_cont=s['overmapped_cont'],
+            origin_count=origin_count
+        )
+
+    return AccuracyResults(thresholds=score_thresholds, results=results)
 
 def measure_accuracy(
     ground_truth: Path,
-    predicted: Path
-    # outfile: Path = None,
-    # skip_r2: bool = False,
-    # recompute_score: bool = False,
-    # multiple_primary: bool = False,
-) -> Accuracy:
+    predicted: Path,
+    score_thresholds: List[int]
+) -> AccuracyResults:
     with (AlignmentFile(predicted) as predicted):
-        # if skip_r2:
-        #     truth = skip_r2_iter(truth)
-        # if multiple_primary:
-        #     if skip_r2:
-        #         predicted = pick_random_primary_single_end_iter(predicted)
-        #     else:
-        #         predicted = pick_random_primary_paired_end_iter(predicted)
-        result = get_iter_stats(ground_truth, predicted)
+        result = get_iter_stats(ground_truth, predicted, score_thresholds)
 
     return result
 
@@ -337,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument("--synthesize-unmapped", default=False, action="store_true", help="If an alignment is missing from predicted, assume the read is unmapped")
     parser.add_argument("--ground-truth", type=Path, help="Path to ground truth alignments (in .bed format)")
     parser.add_argument("--predicted", "--predicted_sam", "--predicted_paf", type=Path, help="Predicted SAM/BAM/PAF")
-    # parser.add_argument("--paf", dest="force_paf", action="store_true", help="Assume PAF input for predicted (usually autodetected, only needed if reading PAF from stdin)")
+    parser.add_argument("--score-thresholds", type=int, nargs='+', default=[25, 30, 35, 40, 45], help="Score thresholds to evaluate")
     parser.add_argument("--outfile", help="Path to file")
     args = parser.parse_args()
 
@@ -345,7 +363,6 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit()
 
-    accuracy = measure_accuracy(args.ground_truth, args.predicted)
+    accuracy_results = measure_accuracy(args.ground_truth, args.predicted, args.score_thresholds)
 
-    # print("\% Mapped endogenous reads\t\% Mapped bacterial reads\t\% Mapped contaminated reads")
-    print(*accuracy.percentages().row(), sep="\t")
+    print(accuracy_results.to_tsv())

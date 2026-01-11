@@ -73,6 +73,7 @@ rule accuracy_tables:
             writer = csv.writer(outfile, delimiter='\t')
             writer.writerow([
                 "Tool",
+                "Score Threshold",
                 "% Mapped endogenous reads",
                 "% Accuracy (endogenous only)",
                 "% Mapped bacterial reads",
@@ -82,8 +83,9 @@ rule accuracy_tables:
             for prog, input_file in zip(params.programs, input):
                 tool_name = tool_names.get(prog, prog)
                 with open(input_file) as f:
-                    values = f.read().strip().split('\t')
-                    writer.writerow([tool_name] + values)
+                    for line in f:
+                        values = line.strip().split('\t')
+                        writer.writerow([tool_name] + values)
 
 
 rule resources:
