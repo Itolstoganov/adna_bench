@@ -1,0 +1,29 @@
+datasets:
+  - name: "ecoli_test"
+    endogenous_genome: "ecoli"
+    contaminant_genome: "ecoli"
+    endogenous_variation: "var3"
+    bacterial_db: "k14"
+    read_length: 40
+    proportions: [0.7, 0.0, 0.3]
+
+num_reads: 5000
+score_thresholds: [25, 30, 35, 40, 45]
+
+versions:
+  - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
+    color: "yellow"
+    name: "strobealign aDNA"
+    arguments: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
+
+  - commit: "15e43182765c3a13a1049c0b7eb07fd60074d8d8"
+    color: "red"
+    name: "strobealign main (15e4318)"
+    arguments: "--mcs=always -S 0.95 -r 30 -k 12"
+
+ends:
+  - se
+
+programs:
+  - bwaaln
+  - bwamem
