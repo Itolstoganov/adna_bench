@@ -5,8 +5,9 @@ channels:
 dependencies:
   - ncbi-genome-download
   - mason=2.0.9
-  - snakemake-minimal=7
-  - python=3.10
+  - snakemake-minimal=9.13.7
+  - snakemake-executor-plugin-slurm
+  - python=3.13
   - pysam
   - dnaio
   - bwa

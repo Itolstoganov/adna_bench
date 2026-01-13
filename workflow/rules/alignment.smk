@@ -81,7 +81,7 @@ rule bwa_aln_paired_end:
 rule bwa_aln_single_end:
     output:
         bam="runs/bwaaln/{dataset_id}/se.bam",
-        sai1=temp("runs/bwaaln/{dataset_id}/1.sai")
+        sai1=temp("runs/bwaaln/{dataset_id}/se.sai")
         # sai2=temp("runs/bwaaln/{dataset_id}/2.sai")
     input:
         fasta="datasets/{dataset_id}/ref.fa",

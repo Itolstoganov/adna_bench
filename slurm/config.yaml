@@ -1,24 +1,13 @@
 # SLURM profile to be used with 'snakemake --profile=slurm'
 
-cluster-sidecar: "slurm-sidecar.py"
-cluster-cancel: "scancel"
-restart-times: "0"
-jobscript: "slurm-jobscript.sh"
-cluster: "slurm-submit.py"
-cluster-status: "slurm-status.py"
-max-jobs-per-second: "10"
-max-status-checks-per-second: "10"
-local-cores: 1
-latency-wait: "5"
-use-conda: "True"
-use-singularity: "False"
-jobs: "500"
-printshellcmds: "True"
+executor: slurm
 
 default-resources:
+#  slurm_account: XXX   # Adjust or set $SLURM_ACCOUNT
+#  slurm_partition: YYY  # Adjust
   runtime: 120
   mem_mb: 2000
-  # account and partition should be specified in in settings.json
+
 
 set-resources:
   single_end_truth:
@@ -72,7 +61,10 @@ set-resources:
   bwa_mem_single_end:
     mem_mb: 32000
 
-  bwa_aln:
+  bwa_aln_paired_end:
+    mem_mb: 32000
+
+  bwa_aln_single_end:
     mem_mb: 32000
 
   strobealign_paf_paired_end:
