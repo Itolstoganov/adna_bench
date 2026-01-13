@@ -3,8 +3,8 @@
 executor: slurm
 
 default-resources:
-#  slurm_account: XXX   # Adjust or set $SLURM_ACCOUNT
-#  slurm_partition: YYY  # Adjust
+  slurm_account: "XXXXXX"   # Adjust or set $SLURM_ACCOUNT
+  slurm_partition: "YYYYYY"  # Adjust
   runtime: 120
   mem_mb: 2000
 
@@ -81,3 +81,7 @@ set-resources:
 
 #set-threads:
 #  my-example-rule: 10
+rerun-triggers: mtime
+jobs: 1000
+cores: 8
+printshellcmds: true

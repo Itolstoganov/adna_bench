@@ -21,7 +21,6 @@ dependencies:
   - pyfaidx
   - fastp
   - gargammel
-  - numpy=1.26
   - zlib
   - singularity
   - bcftools
