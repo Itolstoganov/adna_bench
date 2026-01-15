@@ -40,6 +40,8 @@ versions:
 
 programs:
  - bwaaln
+ - bwamem
+ - safari
 #  - bwamem
 #  - minimap2
 #  - minimapv218

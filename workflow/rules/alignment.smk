@@ -28,8 +28,8 @@ LONG_READ_LENGTH = 1000
 
 import itertools
 
-# localrules:
-#     result_csv, concat_csvs, concat_genome_csvs, plot_ends, plot_genomes, download_xmapper
+localrules:
+    safari_install
 
 # rule final:
 #     input:
@@ -203,26 +203,112 @@ rule strobealign_single_end:
         "\n mv -v {log}.tmp {log}"
 
 
-# rule strobealign_single_end:
-#     output:
-#         bam=temp("runs/strobealign-{program}/{dataset}-{dataset_id}/se.bam")
-#     input:
-#         binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
-#         fasta="genomes/{genome}.fa",
-#         r1_fastq="datasets/{dataset}/{dataset_id}/1.fastq.gz",
-#     params:
-#         extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
-#     threads: 8
-#     log:
-#         "runs/strobealign-{program}/{dataset}-{dataset_id}/se.bam.log"
-#     shell:
-#         "cat {input} > /dev/null; "
-#         "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
-#         " | grep -v '^@PG'"
-#         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
-#         "\n mv -v {output.bam}.tmp.bam {output.bam}"
-#         "\n mv -v {log}.tmp {log}"
-        
+rule safari_install:
+    output:
+        bin="bin/safari/vg"
+    shell:
+        """
+        wget https://github.com/grenaud/SAFARI/releases/download/v1.0.1/vg
+        mv vg {output.bin}
+        chmod 755 {output.bin}
+        """
+
+
+rule safari_index_linear:
+    #todo are all these really necessary
+    #todo add runtime/mem?
+    input:
+        safari="bin/safari/vg",
+        fasta="datasets/{dataset_id}/ref.fa"
+    output:
+        vg="datasets/{dataset_id}/safari/ref.vg",
+        og="datasets/{dataset_id}/safari/ref.og",
+        gfa="datasets/{dataset_id}/safari/ref.gfa",
+        dist="datasets/{dataset_id}/safari/ref.dist",
+        xg="datasets/{dataset_id}/safari/ref.xg",
+        gbz="datasets/{dataset_id}/safari/ref.gbz",
+        gg="datasets/{dataset_id}/safari/ref.gg",
+        gbwt="datasets/{dataset_id}/safari/ref.gbwt",
+        min="datasets/{dataset_id}/safari/ref.min",
+        ry="datasets/{dataset_id}/safari/ref.ry"
+    threads:
+        16
+    shell:
+        """
+        {input.safari} construct -p -r {input.fasta} -t {threads} > {output.vg}
+        {input.safari} convert -t {threads} -o {output.vg} > {output.og}
+        {input.safari} view {output.og} > {output.gfa}
+        {input.safari} index -t {threads} -j {output.dist} {output.og}
+        {input.safari} index -t {threads} -x {output.xg} {output.og}
+        {input.safari} gbwt --num-threads {threads} -g {output.gbz} --gbz-format -G {output.gfa}
+        {input.safari} gbwt --num-threads {threads} -o {output.gbwt} -g {output.gg} -Z {output.gbz}
+        {input.safari} minimizer -t {threads} -o {output.min} -g {output.gbwt} -d {output.dist} {output.og}
+        {input.safari} rymer -t {threads} -o {output.ry} -g {output.gbwt} -d {output.dist} {output.og}
+        """
+
+rule safari_single_end:
+    # todo use more suitable damage profiles
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        deam_3p="safari_data/jeong_2020_cell_SHG003_MT_3p.prof",
+        deam_5p="safari_data/jeong_2020_cell_SHG003_MT_5p.prof",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        min="datasets/{dataset_id}/safari/ref.min",
+        dist="datasets/{dataset_id}/safari/ref.dist",
+        ry="datasets/{dataset_id}/safari/ref.ry",
+        gbz="datasets/{dataset_id}/safari/ref.gbz",
+        safari="bin/safari/vg"
+    output:
+        bam="runs/safari/{dataset_id}/se.bam"
+    log:
+        "runs/safari/{dataset_id}/se.bam.log"
+    params:
+        j=0.5
+    threads:
+        8
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v {input.safari} safari -t {threads} -f {input.r1_fastq} -j {params.j}"
+        " --deam-3p {input.deam_3p} --deam-5p {input.deam_5p}" 
+        " -m {input.min} -d {input.dist} -q {input.ry} -Z {input.gbz} -o bam 2> {log}.tmp"
+        # " | grep -v '^@PG'"
+        # " | samtools view -o {output.bam}.tmp.nomd.bam "
+        " | samtools calmd -b - {input.fasta} --no-PG > {output.bam}.tmp.bam"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule safari_paired_end:
+    # todo use more suitable damage profiles
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        deam_3p="safari_data/jeong_2020_cell_SHG003_MT_3p.prof",
+        deam_5p="safari_data/jeong_2020_cell_SHG003_MT_5p.prof",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+        min="datasets/{dataset_id}/safari/ref.min",
+        dist="datasets/{dataset_id}/safari/ref.dist",
+        ry="datasets/{dataset_id}/safari/ref.ry",
+        gbz="datasets/{dataset_id}/safari/ref.gbz",
+        safari="bin/safari/vg"
+    output:
+        bam="runs/safari/{dataset_id}/pe.bam"
+    log:
+        "runs/safari/{dataset_id}/pe.bam.log"
+    params:
+        j=0.5
+    threads:
+        8
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v {input.safari} safari -t {threads} -f {input.r1_fastq} -f {input.r2_fastq} -j {params.j}"
+        " --deam-3p {input.deam_3p} --deam-5p {input.deam_5p}" 
+        " -m {input.min} -d {input.dist} -q {input.ry} -Z {input.gbz} -o bam 2> {log}.tmp"
+        # " | grep -v '^@PG'"
+        # " | samtools view -o {output.bam}.tmp.nomd.bam "
+        " | samtools calmd -b - {input.fasta} --no-PG > {output.bam}.tmp.bam"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
 
 # def csvs(wildcards):
 #     files = []

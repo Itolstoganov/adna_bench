@@ -1,7 +1,12 @@
+bin
 configs/config.yaml
 gargammel_data
 datasets
 reads
+result
+runs
+csv
+genomes
 .*
 workflow/.snakemake/*
 *__pycache__*

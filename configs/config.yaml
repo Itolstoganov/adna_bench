@@ -46,6 +46,7 @@ ends:
 programs:
  - bwaaln
  - bwamem
+ - safari
 #  - minimap2
 #  - minimapv218
 #  - xmapper

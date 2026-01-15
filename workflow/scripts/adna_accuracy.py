@@ -280,11 +280,14 @@ def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
             ground_truth[read_name] = ReferenceInterval(ref_name, read_origin, int(start_pos), int(end_pos))
 
     for p in filter_bam(predicted):
-        if p.query_name not in ground_truth:
-            print(f"{p.query_name} is not present in ground truth")
+        query_name = p.query_name
+        if query_name.endswith("/1"):
+            query_name = query_name[:-2]
+        if query_name not in ground_truth:
+            print(f"{query_name} is not present in ground truth")
             continue
 
-        truth = ground_truth[p.query_name]
+        truth = ground_truth[query_name]
         read_origin = truth.origin
 
         try:
@@ -300,7 +303,7 @@ def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
                 jacc = jaccard_overlap(p.reference_start, p.reference_end, truth.start, truth.end)
                 is_overlap = overlap(p.reference_start, p.reference_end, truth.start, truth.end)
             except:
-                print(f"Malformed ground truth interval for read {p.query_name}", file=sys.stderr)
+                print(f"Malformed ground truth interval for read {query_name}", file=sys.stderr)
                 print(p.reference_start, p.reference_end, file=sys.stderr)
                 print(truth, file=sys.stderr)
 
