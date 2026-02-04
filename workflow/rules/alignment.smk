@@ -144,6 +144,23 @@ rule bwa_mem_single_end:
 
 # Map reads with strobealign
 
+# rule compile_strobealign:
+#     output: "bin/strobealign/{commit}"
+#     threads: 4
+#     shell:
+#         """
+#         wget https://github.com/ksahlin/strobealign/archive/{wildcards.commit}.zip
+#         unzip -d strobealign-{wildcards.commit} {wildcards.commit}.zip
+#         rm {wildcards.commit}.zip
+#         cd strobealign-{wildcards.commit}/*
+#         cmake -B build -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native"
+#         make -j {threads} -C build strobealign
+#         mv build/strobealign ../../{output}
+#         cd ../..
+#         rm -rf strobealign-{wildcards.commit}
+#         """
+
+# todo release/debug option?
 rule compile_strobealign:
     output: "bin/strobealign/{commit}"
     threads: 4
@@ -153,9 +170,8 @@ rule compile_strobealign:
         unzip -d strobealign-{wildcards.commit} {wildcards.commit}.zip
         rm {wildcards.commit}.zip
         cd strobealign-{wildcards.commit}/*
-        cmake -B build -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native"
-        make -j {threads} -C build strobealign
-        mv build/strobealign ../../{output}
+        cargo build -j 4
+        mv target/debug/strobealign ../../{output}
         cd ../..
         rm -rf strobealign-{wildcards.commit}
         """

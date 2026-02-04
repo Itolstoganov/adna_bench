@@ -38,7 +38,7 @@ SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 
 rule final:
     input:
-        expand("csv/{prog}/{dataset_id}/pe.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
+        expand("csv/{prog}/{dataset_id}/se.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS)
 
@@ -50,9 +50,10 @@ rule run_adna_accuracy:
         gt="datasets/{dataset_id}/ref_ground_truth.bed",
         bam="runs/{prog}/{dataset_id}/se.bam"
     params:
-        thresholds=" ".join(str(t) for t in SCORE_THRESHOLDS)
-    shell:
-        "python workflow/scripts/adna_accuracy.py --ground-truth {input.gt} --predicted {input.bam} --score-thresholds {params.thresholds} > {output}"
+        thresholds=SCORE_THRESHOLDS,
+        recompute_as = lambda wildcards: False if wildcards.prog.startswith("strobealign") else True
+    script:
+        "scripts/adna_accuracy.py"
 
 
 rule accuracy_tables:

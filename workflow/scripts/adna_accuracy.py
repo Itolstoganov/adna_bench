@@ -172,7 +172,14 @@ def parse_int_or_not(s):
 
 
 def recompute_alignment_score(segment, scores) -> int:
-    md_tag = segment.get_tag("MD")
+    # print("has tag", segment.has_tag("MD"))
+    # if not segment.has_tag("MD"):
+    #     print(segment)
+    if segment.is_unmapped:
+        # print("unmapped")
+        return 0
+    md_tag = segment.get_tag("MD") if segment.has_tag("MD") else None
+    # print("MD", md_tag)
     md = [
         parse_int_or_not(e)
         for e in re.split("([A-Z]|^[A-Z]+|[0-9]+)", md_tag)
@@ -244,7 +251,7 @@ def filter_bam(alignment_file):
             yield record
             
 
-def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
+def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=True) -> AccuracyResults:
     """
     Compute accuracy statistics for multiple score thresholds in a single pass.
 
@@ -291,7 +298,9 @@ def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
         read_origin = truth.origin
 
         try:
-            score = p.get_tag("AS") if p.has_tag("AS") else recompute_alignment_score(p, Scores)
+            as_tag = p.get_tag("AS") if p.has_tag("AS") else None
+            recompute_score = always_recompute_as or (not as_tag)
+            score = recompute_alignment_score(p, Scores) if recompute_score else as_tag
         except:
             unscored += 1
             score = min(score_thresholds) - 1  
@@ -341,15 +350,27 @@ def get_iter_stats(gt_path, predicted, score_thresholds) -> AccuracyResults:
 def measure_accuracy(
     ground_truth: Path,
     predicted: Path,
-    score_thresholds: List[int]
+    score_thresholds: List[int],
+    recompute_score: bool
 ) -> AccuracyResults:
     with (AlignmentFile(predicted) as predicted):
-        result = get_iter_stats(ground_truth, predicted, score_thresholds)
+        result = get_iter_stats(ground_truth, predicted, score_thresholds, always_recompute_as=recompute_score)
 
     return result
 
 
-if __name__ == "__main__":
+if "snakemake" in dir():
+    # Called via Snakemake script directive
+    accuracy_results = measure_accuracy(
+        snakemake.input.gt,
+        snakemake.input.bam,
+        snakemake.params.thresholds,
+        snakemake.params.recompute_as
+    )
+    with open(snakemake.output[0], "w") as f:
+        f.write(accuracy_results.to_tsv())
+
+elif __name__ == "__main__":
     # random.seed(0)
     parser = argparse.ArgumentParser(
         description="Calc identity",
@@ -369,6 +390,6 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit()
 
-    accuracy_results = measure_accuracy(args.ground_truth, args.predicted, args.score_thresholds)
+    accuracy_results = measure_accuracy(args.ground_truth, args.predicted, args.score_thresholds, args.recompute_score)
 
     print(accuracy_results.to_tsv())

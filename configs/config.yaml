@@ -26,19 +26,19 @@ datasets:
 num_reads: 100000
 
 # Accuracy evaluation parameters
-score_thresholds: [25, 30, 35, 40]
+score_thresholds: [20, 40, 60, 80, 90, 100]
 
 # Alignment parameters
 versions:
-  - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
+  - commit: "15ea2c56c088cdc9b9074f8f761f113ad2456b25"
     color: "yellow"
     name: "strobealign aDNA"
-    arguments: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
+    arguments: "--adna --mcs=always -S 0.95 -r 30 -k 14"
 
-  - commit: "15e43182765c3a13a1049c0b7eb07fd60074d8d8"
+  - commit: "21c05402bfbcfdd3e2bf59a53677a2b726584464"
     color: "red"
-    name: "strobealign main (15e4318)"
-    arguments: "--mcs=always -S 0.95 -r 30 -k 12"
+    name: "strobealign main (21c0540)"
+    arguments: "--mcs=always -S 0.95 -r 30 -k 14"
 
 ends:
  - se
