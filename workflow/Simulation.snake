@@ -160,7 +160,7 @@ rule gt_liftover:
         fasta=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.fa"
     output:
         gt="datasets/{dataset_id}/ref_ground_truth.bed",
-        fasta="datasets/{dataset_id}/ref.fa"
+        fasta="datasets/{dataset_id}/ref_unsanitized.fa"
     params:
         unmapped="datasets/{dataset_id}/ref_ground_truth.bed.unmapped"
     singularity:
@@ -170,4 +170,15 @@ rule gt_liftover:
         g2gtools convert --in {input.gt} --vci {input.vci} -f BED --out {output.gt}
         cat {params.unmapped} >> {output.gt}
         ln -sfr {input.fasta} {output.fasta}
+        """
+
+
+rule sanitize_ref:
+    input:
+        fasta="datasets/{dataset_id}/ref_unsanitized.fa"
+    output:
+        fasta="datasets/{dataset_id}/ref.fa"
+    shell:
+        """
+        {SCRIPTS}/remove_nonacgt.py -i {input.fasta} -o {output.fasta}
         """

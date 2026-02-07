@@ -95,7 +95,6 @@ rule bwa_aln_single_end:
     shell:
         # "cat {input} > /dev/null; "
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
-        # "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r2_fastq} > {output.sai2} 2> {log}.tmp"
         "\n bwa samse {input.fasta} {output.sai1} {input.r1_fastq} "
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
