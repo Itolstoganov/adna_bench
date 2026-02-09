@@ -3,8 +3,8 @@
 executor: slurm
 
 default-resources:
-  slurm_account: "XXXXXX"   # Adjust or set $SLURM_ACCOUNT
-  slurm_partition: "YYYYYY"  # Adjust
+  slurm_account: "XXX"   # Adjust or set $SLURM_ACCOUNT
+  slurm_partition: "YYY"  # Adjust
   runtime: 120
   mem_mb: 2000
 
@@ -78,6 +78,12 @@ set-resources:
 
   strobealign_single_end:
     mem_mb: 38000
+
+  safari_index_linear:
+    mem_mb: 96000
+
+  safari_single_end:
+    mem_mb: 96000
 
 #set-threads:
 #  my-example-rule: 10
