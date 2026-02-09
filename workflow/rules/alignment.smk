@@ -113,9 +113,11 @@ rule bwa_mem_paired_end:
     threads: 8
     log:
         "runs/bwamem/{dataset_id}/pe.bam.log"
+    params:
+        adna="-k 19 -r 2.5"
     shell:
         "cat {input} > /dev/null; "
-        "/usr/bin/time -v bwa mem -t {threads} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
+        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
@@ -132,9 +134,11 @@ rule bwa_mem_single_end:
     threads: 8
     log:
         "runs/bwamem/{dataset_id}/se.bam.log"
+    params:
+        adna="-k 19 -r 2.5"
     shell:
         "cat {input} > /dev/null; "
-        "/usr/bin/time -v bwa mem -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
+        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
