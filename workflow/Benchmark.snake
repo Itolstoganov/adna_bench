@@ -6,7 +6,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, accuracy_tables, k_plots
+    plots, resources, accuracy_tables, resource_tables, k_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -45,17 +45,17 @@ if config["programs"]:
 PLOTS = ("accuracy", "aligned", "time", "memory")
 
 
-PLOT_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
+ACCURACY_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
+PLOT_METRICS = ACCURACY_METRICS + ["runtime"]
 SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
 K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS]
-
-# print(HAS_MULTI_K)
 
 rule final:
     input:
         expand("csv/{prog}/{dataset_id}/se.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
         expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else []
 
@@ -117,26 +117,62 @@ rule accuracy_tables:
                         writer.writerow([info["name"], info["base_name"], info["k"]] + values)
 
 
+rule resource_tables:
+    output:
+        "result/{dataset_id}/resource_table.tsv"
+    input:
+        expand("csv/{prog}/{{dataset_id}}/se.bam.resources.csv", prog=PROGRAMS)
+    params:
+        programs=PROGRAMS
+    run:
+        import csv
+
+        tool_info = {}
+        for key, version in VERSIONS.items():
+            prog_name = f"strobealign-{key}"
+            tool_info[prog_name] = {
+                "name": version["name"],
+                "base_name": version["base_name"],
+                "k": str(version["k"]) if version["k"] is not None else "",
+            }
+
+        for prog in config.get("programs", []):
+            tool_info[prog] = {"name": prog, "base_name": "", "k": ""}
+
+        with open(output[0], 'w', newline='') as outfile:
+            writer = csv.writer(outfile, delimiter='\t')
+            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)"])
+
+            for prog, res_file in zip(params.programs, input):
+                info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})
+                with open(res_file) as f:
+                    fields = f.read().strip().split(",")
+                    mapping_time = fields[6] if len(fields) > 6 else ""
+                    writer.writerow([info["name"], info["base_name"], info["k"], mapping_time])
+
+
 rule plots:
     output:
         expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=PLOT_METRICS)
     input:
-        "result/{dataset_id}/accuracy_table.tsv"
+        accuracy="result/{dataset_id}/accuracy_table.tsv",
+        resources="result/{dataset_id}/resource_table.tsv"
     params:
         k=config.get("main_k", 17)
     shell:
-        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots --k {params.k}"
+        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k {params.k}"
 
 
 rule k_plots:
     output:
         expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=K_PLOT_METRICS)
     input:
-        "result/{dataset_id}/accuracy_table.tsv"
+        accuracy="result/{dataset_id}/accuracy_table.tsv",
+        resources="result/{dataset_id}/resource_table.tsv"
     params:
         threshold=config.get("main_score_threshold", 60)
     shell:
-        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold}"
+        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold}"
 
 
 rule resources:
@@ -155,7 +191,7 @@ rule resources:
         memory=$(awk '/Maximum resident/ {{print $NF/1048576}}' {input.log})
         indexing_time=$(awk '/Total time indexing:/ {{print $4}}' {input.log})
         mapping_time=$(awk '/Total time mapping:/ {{print $4}}' {input.log})
-        if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([1-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
+        if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([0-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
         if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{print total-t}}' {input.log}); fi
         echo ,${{mapping_time}},${{memory}} >> {output}.tmp
         mv {output.csv}.tmp {output.csv}

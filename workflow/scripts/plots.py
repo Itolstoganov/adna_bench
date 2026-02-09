@@ -49,9 +49,43 @@ def plot_k_metric(df, metric_col, output_path, score_threshold):
     plt.close()
 
 
+def plot_runtime(res_df, output_path, k):
+    filtered = res_df[(res_df["k"] == k) | (res_df["k"].astype(str).str.strip() == "nan")]
+    if filtered.empty:
+        return
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=filtered, x="Tool", y="Mapping Time (s)")
+    plt.xlabel("Tool")
+    plt.ylabel("Mapping Time (s)")
+    plt.title("Mapping Time")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def plot_k_runtime(res_df, output_path):
+    k_df = res_df[res_df["k"].astype(str).str.strip() != "nan"].copy()
+    k_df["k"] = k_df["k"].astype(int)
+    if k_df.empty:
+        return
+
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=k_df, x="k", y="Mapping Time (s)", hue="Base Name", marker="o")
+    plt.xlabel("k")
+    plt.ylabel("Mapping Time (s)")
+    plt.title("Mapping Time")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--resources", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--k-plot", action="store_true")
     parser.add_argument("--score-threshold", type=int, default=60)
@@ -59,14 +93,19 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.input, sep="\t")
+    res_df = pd.read_csv(args.resources, sep="\t") if args.resources else None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.k_plot:
         for col_name, file_name in METRICS:
             plot_k_metric(df, col_name, args.output_dir / f"k_{file_name}.pdf", args.score_threshold)
+        if res_df is not None:
+            plot_k_runtime(res_df, args.output_dir / "k_runtime.pdf")
     else:
         for col_name, file_name in METRICS:
             plot_metric(df, col_name, args.output_dir / f"{file_name}.pdf", args.k)
+        if res_df is not None:
+            plot_runtime(res_df, args.output_dir / "runtime.pdf", args.k)
 
 
 if __name__ == "__main__":

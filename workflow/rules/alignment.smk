@@ -135,7 +135,7 @@ rule bwa_mem_single_end:
     log:
         "runs/bwamem/{dataset_id}/se.bam.log"
     params:
-        adna="-k 19 -r 2.5"
+        adna="-k 15 -r 2.5"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
