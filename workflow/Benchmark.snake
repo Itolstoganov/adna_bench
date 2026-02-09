@@ -6,7 +6,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, accuracy_tables
+    plots, resources, accuracy_tables, k_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -14,18 +14,30 @@ ENDS = config.get("ends", ("pe"))
 DATASET_CONFIGS = expand_datasets(config.get("datasets", []))
 DATASET_IDS = list(DATASET_CONFIGS.keys())
 
+k_values = config.get("k", [None])
 VERSIONS = {}
 for version in config.get("versions", []):
-    key = version["commit"]
-    if arg := version.get("arguments", ""):
-        key += "-" + arg.replace(" ", "").replace("-", "").replace("=", "")
-    VERSIONS[key] = {
-        "commit": version["commit"],
-        "arguments": f" {arg}" if arg else "",
-        "name": version["name"],
-        "color": version["color"],
-        "binary": f"bin/strobealign/{version['commit']}",
-    }
+    for k in k_values:
+        arg = version.get("arguments", "")
+        if k is not None:
+            full_arg = f"{arg} -k {k}" if arg else f"-k {k}"
+        else:
+            full_arg = arg
+        key = version["commit"]
+        if full_arg:
+            key += "-" + full_arg.replace(" ", "").replace("-", "").replace("=", "")
+        display_name = version["name"]
+        if k is not None and len(k_values) > 1:
+            display_name += f" (k={k})"
+        VERSIONS[key] = {
+            "commit": version["commit"],
+            "arguments": f" {full_arg}" if full_arg else "",
+            "name": display_name,
+            "base_name": version["name"],
+            "color": version["color"],
+            "binary": f"bin/strobealign/{version['commit']}",
+            "k": k,
+        }
 
 PROGRAMS = expand("strobealign-{key}", key=VERSIONS.keys())
 if config["programs"]:
@@ -35,12 +47,17 @@ PLOTS = ("accuracy", "aligned", "time", "memory")
 
 PLOT_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
 SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
+HAS_MULTI_K = len(k_values) > 1
+K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS]
+
+# print(HAS_MULTI_K)
 
 rule final:
     input:
         expand("csv/{prog}/{dataset_id}/se.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
-        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS)
+        expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
+        expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else []
 
 
 rule run_adna_accuracy:
@@ -67,18 +84,24 @@ rule accuracy_tables:
     run:
         import csv
 
-        tool_names = {}
+        tool_info = {}
         for key, version in VERSIONS.items():
             prog_name = f"strobealign-{key}"
-            tool_names[prog_name] = version["name"]
+            tool_info[prog_name] = {
+                "name": version["name"],
+                "base_name": version["base_name"],
+                "k": str(version["k"]) if version["k"] is not None else "",
+            }
 
         for prog in config.get("programs", []):
-            tool_names[prog] = prog
+            tool_info[prog] = {"name": prog, "base_name": "", "k": ""}
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
             writer.writerow([
                 "Tool",
+                "Base Name",
+                "k",
                 "Score Threshold",
                 "% Mapped endogenous reads",
                 "% Accuracy (endogenous only)",
@@ -87,20 +110,33 @@ rule accuracy_tables:
             ])
 
             for prog, input_file in zip(params.programs, input):
-                tool_name = tool_names.get(prog, prog)
+                info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})
                 with open(input_file) as f:
                     for line in f:
                         values = line.strip().split('\t')
-                        writer.writerow([tool_name] + values)
+                        writer.writerow([info["name"], info["base_name"], info["k"]] + values)
 
 
 rule plots:
     output:
-        expand("result/{{dataset_id}}/plots/{metric}.png", metric=PLOT_METRICS)
+        expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=PLOT_METRICS)
     input:
         "result/{dataset_id}/accuracy_table.tsv"
+    params:
+        k=config.get("main_k", 17)
     shell:
-        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots"
+        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots --k {params.k}"
+
+
+rule k_plots:
+    output:
+        expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=K_PLOT_METRICS)
+    input:
+        "result/{dataset_id}/accuracy_table.tsv"
+    params:
+        threshold=config.get("main_score_threshold", 60)
+    shell:
+        "python workflow/scripts/plots.py --input {input} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold}"
 
 
 rule resources:
