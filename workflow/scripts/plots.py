@@ -18,6 +18,7 @@ def plot_metric(df, metric_col, output_path, k):
     filtered_df = df[(df["k"] == k) | (df["k"].astype(str).str.strip() == "nan")]
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=filtered_df, x="Score Threshold", y=metric_col, hue="Tool", marker="o")
+    plt.xticks(sorted(filtered_df["Score Threshold"].unique()))
     plt.xlabel("Score Threshold")
     plt.ylabel(metric_col)
     plt.title(metric_col)
@@ -39,6 +40,7 @@ def plot_k_metric(df, metric_col, output_path, score_threshold):
 
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=k_df, x="k", y=metric_col, hue="Base Name", marker="o")
+    plt.xticks(sorted(k_df["k"].unique()))
     plt.xlabel("k")
     plt.ylabel(metric_col)
     plt.title(f"{metric_col} (score threshold = {score_threshold})")
@@ -73,6 +75,7 @@ def plot_k_runtime(res_df, output_path):
 
     plt.figure(figsize=(10, 6))
     sns.lineplot(data=k_df, x="k", y="Mapping Time (s)", hue="Base Name", marker="o")
+    plt.xticks(sorted(k_df["k"].unique()))
     plt.xlabel("k")
     plt.ylabel("Mapping Time (s)")
     plt.title("Mapping Time")
