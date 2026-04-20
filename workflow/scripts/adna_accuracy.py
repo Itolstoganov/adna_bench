@@ -103,13 +103,19 @@ class AccuracyResults:
     
 
 def parse_gargammel_name(read_name: str):
-    ref_name, orientation, start_pos, end_pos, origin_string = read_name.split(":")
+    parts = read_name.split(":")
+    if len(parts) < 5:
+        raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
+    ref_name, orientation, start_pos, end_pos = parts[:4]
+    origin_string = ":".join(parts[4:])
+    # deamSim -name appends "_DEAM:<csv-positions>"; strip it before matching.
+    origin_string = origin_string.split("_DEAM:", 1)[0]
     match = re.match(r'(\d+)(a|b|c|d|e)(.*)', origin_string)
 
     if not match:
         print(origin_string)
         raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
-    
+
     read_len, read_origin, allele = match.groups()
     return ref_name, int(start_pos), int(end_pos), read_origin
 
