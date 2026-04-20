@@ -145,6 +145,49 @@ rule bwa_mem_single_end:
         "\n mv -v {log}.tmp {log}"
 
 
+rule bwa_mem_k_paired_end:
+    output:
+        bam="runs/bwamem-k{k}/{dataset_id}/pe.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+    threads: 8
+    log:
+        "runs/bwamem-k{k}/{dataset_id}/pe.bam.log"
+    params:
+        adna=lambda wildcards: f"-k {wildcards.k} -r 2.5"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule bwa_mem_k_single_end:
+    output:
+        bam="runs/bwamem-k{k}/{dataset_id}/se.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+    threads: 8
+    log:
+        "runs/bwamem-k{k}/{dataset_id}/se.bam.log"
+    params:
+        adna=lambda wildcards: f"-k {wildcards.k} -r 2.5"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
 # Map reads with strobealign
 
 # rule compile_strobealign:

@@ -29,25 +29,34 @@ def plot_metric(df, metric_col, output_path, k):
 
 
 def plot_k_metric(df, metric_col, output_path, score_threshold):
-    # print(df["Base Name"])
-    # print(df["k"].astype(str).str.strip())
     k_df = df[(df["k"].astype(str).str.strip() != "nan")].copy()
-    # print(k_df)
     k_df["k"] = k_df["k"].astype(int)
     k_df = k_df[k_df["Score Threshold"] == score_threshold]
-    if k_df.empty:
+
+    non_k_df = df[(df["k"].astype(str).str.strip() == "nan")].copy()
+    non_k_df = non_k_df[non_k_df["Score Threshold"] == score_threshold]
+
+    if k_df.empty and non_k_df.empty:
         return
 
+    all_names = list(k_df["Base Name"].unique()) + list(non_k_df["Tool"].unique())
+    palette = dict(zip(all_names, sns.color_palette("tab10", n_colors=len(all_names))))
+
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=k_df, x="k", y=metric_col, hue="Base Name", marker="o")
-    plt.xticks(sorted(k_df["k"].unique()))
+    if not k_df.empty:
+        sns.lineplot(data=k_df, x="k", y=metric_col, hue="Base Name", palette=palette, marker="o")
+
+    for _, row in non_k_df.iterrows():
+        plt.axhline(y=row[metric_col], linestyle="--", color=palette[row["Tool"]], label=row["Tool"])
+
+    if not k_df.empty:
+        plt.xticks(sorted(k_df["k"].unique()))
     plt.xlabel("k")
     plt.ylabel(metric_col)
-    plt.title(f"{metric_col} (score threshold = {score_threshold})")
+    plt.title(f"{metric_col})")
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
-    print(output_path)
     plt.close()
 
 
@@ -67,15 +76,73 @@ def plot_runtime(res_df, output_path, k):
     plt.close()
 
 
-def plot_k_runtime(res_df, output_path):
-    k_df = res_df[res_df["k"].astype(str).str.strip() != "nan"].copy()
-    k_df["k"] = k_df["k"].astype(int)
-    if k_df.empty:
+def plot_user_time(res_df, output_path, k):
+    filtered = res_df[(res_df["k"] == k) | (res_df["k"].astype(str).str.strip() == "nan")]
+    if filtered.empty:
         return
 
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=k_df, x="k", y="Mapping Time (s)", hue="Base Name", marker="o")
-    plt.xticks(sorted(k_df["k"].unique()))
+    sns.barplot(data=filtered, x="Tool", y="User Time (s)")
+    plt.xlabel("Tool")
+    plt.ylabel("User Time (s)")
+    plt.title("User Time")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def plot_k_user_time(res_df, output_path):
+    k_df = res_df[res_df["k"].astype(str).str.strip() != "nan"].copy()
+    k_df["k"] = k_df["k"].astype(int)
+
+    non_k_df = res_df[res_df["k"].astype(str).str.strip() == "nan"].copy()
+
+    if k_df.empty and non_k_df.empty:
+        return
+
+    all_names = list(k_df["Base Name"].unique()) + list(non_k_df["Tool"].unique())
+    palette = dict(zip(all_names, sns.color_palette("tab10", n_colors=len(all_names))))
+
+    plt.figure(figsize=(10, 6))
+    if not k_df.empty:
+        sns.lineplot(data=k_df, x="k", y="User Time (s)", hue="Base Name", palette=palette, marker="o")
+
+    for _, row in non_k_df.iterrows():
+        plt.axhline(y=row["User Time (s)"], linestyle="--", color=palette[row["Tool"]], label=row["Tool"])
+
+    if not k_df.empty:
+        plt.xticks(sorted(k_df["k"].unique()))
+    plt.xlabel("k")
+    plt.ylabel("User Time (s)")
+    plt.title("User Time")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def plot_k_runtime(res_df, output_path):
+    k_df = res_df[res_df["k"].astype(str).str.strip() != "nan"].copy()
+    k_df["k"] = k_df["k"].astype(int)
+
+    non_k_df = res_df[res_df["k"].astype(str).str.strip() == "nan"].copy()
+
+    if k_df.empty and non_k_df.empty:
+        return
+
+    all_names = list(k_df["Base Name"].unique()) + list(non_k_df["Tool"].unique())
+    palette = dict(zip(all_names, sns.color_palette("tab10", n_colors=len(all_names))))
+
+    plt.figure(figsize=(10, 6))
+    if not k_df.empty:
+        sns.lineplot(data=k_df, x="k", y="Mapping Time (s)", hue="Base Name", palette=palette, marker="o")
+
+    for _, row in non_k_df.iterrows():
+        plt.axhline(y=row["Mapping Time (s)"], linestyle="--", color=palette[row["Tool"]], label=row["Tool"])
+
+    if not k_df.empty:
+        plt.xticks(sorted(k_df["k"].unique()))
     plt.xlabel("k")
     plt.ylabel("Mapping Time (s)")
     plt.title("Mapping Time")
@@ -101,14 +168,16 @@ def main():
 
     if args.k_plot:
         for col_name, file_name in METRICS:
-            plot_k_metric(df, col_name, args.output_dir / f"k_{file_name}.pdf", args.score_threshold)
+            plot_k_metric(df, col_name, args.output_dir / f"k_{file_name}.png", args.score_threshold)
         if res_df is not None:
-            plot_k_runtime(res_df, args.output_dir / "k_runtime.pdf")
+            plot_k_runtime(res_df, args.output_dir / "k_runtime.png")
+            plot_k_user_time(res_df, args.output_dir / "k_user_time.png")
     else:
         for col_name, file_name in METRICS:
-            plot_metric(df, col_name, args.output_dir / f"{file_name}.pdf", args.k)
+            plot_metric(df, col_name, args.output_dir / f"{file_name}.png", args.k)
         if res_df is not None:
-            plot_runtime(res_df, args.output_dir / "runtime.pdf", args.k)
+            plot_runtime(res_df, args.output_dir / "runtime.png", args.k)
+            plot_user_time(res_df, args.output_dir / "user_time.png", args.k)
 
 
 if __name__ == "__main__":

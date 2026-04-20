@@ -40,13 +40,28 @@ for version in config.get("versions", []):
         }
 
 PROGRAMS = expand("strobealign-{key}", key=VERSIONS.keys())
+
+BWAMEM_K_PROGRAMS = {}
+if "bwamem" in config.get("programs", []) and len(k_values) > 1:
+    for k in k_values:
+        prog_name = f"bwamem-k{k}"
+        BWAMEM_K_PROGRAMS[prog_name] = {
+            "name": f"bwa mem (k={k})",
+            "base_name": "bwa mem",
+            "k": str(k),
+        }
+
 if config["programs"]:
-    PROGRAMS.extend(config["programs"])
+    for prog in config["programs"]:
+        if prog == "bwamem" and BWAMEM_K_PROGRAMS:
+            PROGRAMS.extend(BWAMEM_K_PROGRAMS.keys())
+        else:
+            PROGRAMS.append(prog)
 PLOTS = ("accuracy", "aligned", "time", "memory")
 
 
 ACCURACY_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
-PLOT_METRICS = ACCURACY_METRICS + ["runtime"]
+PLOT_METRICS = ACCURACY_METRICS + ["runtime", "user_time"]
 SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
 K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS]
@@ -56,8 +71,8 @@ rule final:
         expand("csv/{prog}/{dataset_id}/se.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
-        expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
-        expand("result/{dataset_id}/plots/{metric}.pdf", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else []
+        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
+        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else []
 
 
 rule run_adna_accuracy:
@@ -94,7 +109,12 @@ rule accuracy_tables:
             }
 
         for prog in config.get("programs", []):
+            if prog == "bwamem" and BWAMEM_K_PROGRAMS:
+                continue
             tool_info[prog] = {"name": prog, "base_name": "", "k": ""}
+
+        for prog_name, info in BWAMEM_K_PROGRAMS.items():
+            tool_info[prog_name] = info
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
@@ -137,23 +157,29 @@ rule resource_tables:
             }
 
         for prog in config.get("programs", []):
+            if prog == "bwamem" and BWAMEM_K_PROGRAMS:
+                continue
             tool_info[prog] = {"name": prog, "base_name": "", "k": ""}
+
+        for prog_name, info in BWAMEM_K_PROGRAMS.items():
+            tool_info[prog_name] = info
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)"])
+            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)", "User Time (s)"])
 
             for prog, res_file in zip(params.programs, input):
                 info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})
                 with open(res_file) as f:
                     fields = f.read().strip().split(",")
                     mapping_time = fields[6] if len(fields) > 6 else ""
-                    writer.writerow([info["name"], info["base_name"], info["k"], mapping_time])
+                    user_time = fields[8] if len(fields) > 8 else ""
+                    writer.writerow([info["name"], info["base_name"], info["k"], mapping_time, user_time])
 
 
 rule plots:
     output:
-        expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=PLOT_METRICS)
+        expand("result/{{dataset_id}}/plots/{metric}.png", metric=PLOT_METRICS)
     input:
         accuracy="result/{dataset_id}/accuracy_table.tsv",
         resources="result/{dataset_id}/resource_table.tsv"
@@ -165,7 +191,7 @@ rule plots:
 
 rule k_plots:
     output:
-        expand("result/{{dataset_id}}/plots/{metric}.pdf", metric=K_PLOT_METRICS)
+        expand("result/{{dataset_id}}/plots/{metric}.png", metric=K_PLOT_METRICS)
     input:
         accuracy="result/{dataset_id}/accuracy_table.tsv",
         resources="result/{dataset_id}/resource_table.tsv"
@@ -192,7 +218,8 @@ rule resources:
         indexing_time=$(awk '/Total time indexing:/ {{print $4}}' {input.log})
         mapping_time=$(awk '/Total time mapping:/ {{print $4}}' {input.log})
         if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([0-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
-        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{print total-t}}' {input.log}); fi
-        echo ,${{mapping_time}},${{memory}} >> {output}.tmp
+        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/Elapsed \(wall clock\)/ {{split($NF, a, ":"); if (length(a)==3) print a[1]*3600+a[2]*60+a[3]; else print a[1]*60+a[2]}}' {input.log}); fi
+        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{if (total) print total-t}}' {input.log}); fi
+        echo ,${{mapping_time}},${{memory}},${{user_time}} >> {output}.tmp
         mv {output.csv}.tmp {output.csv}
         """
