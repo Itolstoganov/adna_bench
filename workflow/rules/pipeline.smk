@@ -27,7 +27,7 @@ def expand_datasets(dataset_configs):
             read_lengths = [read_lengths]
 
         for endo_var, read_len in product(endo_vars, read_lengths):
-            dataset_id = f"{endo_genome}_{cont_genome}_{bact_db}_{endo_var}_len{read_len}_0p7"
+            dataset_id = f"{endo_genome}_{cont_genome}_{bact_db}_{endo_var}_len{read_len}"
 
             expanded[dataset_id] = {
                 "endogenous_genome": endo_genome,

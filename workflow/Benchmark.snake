@@ -60,7 +60,14 @@ if config["programs"]:
 PLOTS = ("accuracy", "aligned", "time", "memory")
 
 
-ACCURACY_METRICS = ["mapped_endogenous", "accuracy", "mapped_bacterial", "mapped_contaminated"]
+ACCURACY_METRICS = [
+    "mapped_endogenous",
+    "accuracy",
+    "mapped_endogenous_deam",
+    "accuracy_deam",
+    "mapped_bacterial",
+    "mapped_contaminated",
+]
 PLOT_METRICS = ACCURACY_METRICS + ["runtime", "user_time"]
 SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
@@ -125,6 +132,8 @@ rule accuracy_tables:
                 "Score Threshold",
                 "% Mapped endogenous reads",
                 "% Accuracy (endogenous only)",
+                "% Mapped deaminated endogenous reads",
+                "% Accuracy (deaminated endogenous only)",
                 "% Mapped bacterial reads",
                 "% Mapped contaminated reads"
             ])

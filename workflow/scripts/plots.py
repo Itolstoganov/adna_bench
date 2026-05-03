@@ -9,6 +9,8 @@ from pathlib import Path
 METRICS = [
     ("% Mapped endogenous reads", "mapped_endogenous"),
     ("% Accuracy (endogenous only)", "accuracy"),
+    ("% Mapped deaminated endogenous reads", "mapped_endogenous_deam"),
+    ("% Accuracy (deaminated endogenous only)", "accuracy_deam"),
     ("% Mapped bacterial reads", "mapped_bacterial"),
     ("% Mapped contaminated reads", "mapped_contaminated"),
 ]

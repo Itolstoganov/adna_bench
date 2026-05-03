@@ -37,6 +37,7 @@ class ReferenceInterval:
     origin: str
     start: int
     end: int
+    is_deaminated: bool = False
 
     def __iter__(self):
         return iter((self.name, self.origin, self.start, self.end))
@@ -46,6 +47,8 @@ class ReferenceInterval:
 class AccuracyPercentages:
     aligned: float
     correct: float
+    aligned_deam: float
+    correct_deam: float
     score_correct: float
     jaccard_correct: float
     overmapped_bact: int
@@ -55,6 +58,8 @@ class AccuracyPercentages:
         return (
             self.aligned,
             self.correct,
+            self.aligned_deam,
+            self.correct_deam,
             self.overmapped_bact,
             self.overmapped_cont
             # self.unaligned,
@@ -68,6 +73,8 @@ class Accuracy:
     n: int
     aligned: int
     correct: int
+    aligned_deam: int
+    correct_deam: int
     score_correct: int | None  # unavailable for PAF
     jaccard_correct: int
     overmapped_bact: int
@@ -75,9 +82,13 @@ class Accuracy:
     origin_count: dict
 
     def percentages(self) -> AccuracyPercentages:
+        endo = self.origin_count.get("e", 0)
+        endo_deam = self.origin_count.get("e_deam", 0)
         return AccuracyPercentages(
-            aligned=100 * self.aligned / self.origin_count["e"],
-            correct=100 * self.correct / self.origin_count["e"],
+            aligned=100 * self.aligned / endo if endo > 0 else 0,
+            correct=100 * self.correct / endo if endo > 0 else 0,
+            aligned_deam=100 * self.aligned_deam / endo_deam if endo_deam > 0 else 0,
+            correct_deam=100 * self.correct_deam / endo_deam if endo_deam > 0 else 0,
             overmapped_bact=100 * self.overmapped_bact / self.origin_count["b"] if self.origin_count["b"] > 0 else 0,
             overmapped_cont=100 * self.overmapped_cont / self.origin_count["c"] if self.origin_count["c"] > 0 else 0,
             jaccard_correct=round(100 * self.jaccard_correct / self.n, 5),
@@ -108,7 +119,9 @@ def parse_gargammel_name(read_name: str):
         raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
     ref_name, orientation, start_pos, end_pos = parts[:4]
     origin_string = ":".join(parts[4:])
-    # deamSim -name appends "_DEAM:<csv-positions>"; strip it before matching.
+    # deamSim -name appends "_DEAM:<csv-positions>" only when at least one
+    # base was actually deaminated
+    is_deaminated = "_DEAM:" in origin_string
     origin_string = origin_string.split("_DEAM:", 1)[0]
     match = re.match(r'(\d+)(a|b|c|d|e)(.*)', origin_string)
 
@@ -117,7 +130,7 @@ def parse_gargammel_name(read_name: str):
         raise ValueError(f"Could not parse read name: {read_name}, please make sure that the reads were simulated using gargammel")
 
     read_len, read_origin, allele = match.groups()
-    return ref_name, int(start_pos), int(end_pos), read_origin
+    return ref_name, int(start_pos), int(end_pos), read_origin, is_deaminated
 
 
 def read_alignments(bam_path):
@@ -274,23 +287,29 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
         stats[threshold] = {
             'n': 0,
             'nr_aligned': 0,
+            'nr_aligned_deam': 0,
             'overmapped_bact': 0,
             'overmapped_cont': 0,
             'correct': 0,
+            'correct_deam': 0,
             'correct_jaccard': 0.0,
             'correct_score': 0
         }
 
     unscored = 0
     ground_truth = {}
-    origin_count = {"b": 0, "c": 0, "e": 0}
+    origin_count = {"b": 0, "c": 0, "e": 0, "e_deam": 0}
 
     with open(gt_path) as gt_handle:
         for line in gt_handle:
             ref_name, start_pos, end_pos, read_name, _, orientation = line.strip().split()
-            _, _, _, read_origin = parse_gargammel_name(read_name)
+            _, _, _, read_origin, is_deaminated = parse_gargammel_name(read_name)
             origin_count[read_origin] += 1
-            ground_truth[read_name] = ReferenceInterval(ref_name, read_origin, int(start_pos), int(end_pos))
+            if read_origin == "e" and is_deaminated:
+                origin_count["e_deam"] += 1
+            ground_truth[read_name] = ReferenceInterval(
+                ref_name, read_origin, int(start_pos), int(end_pos), is_deaminated
+            )
 
     for p in filter_bam(predicted):
         query_name = p.query_name
@@ -332,9 +351,13 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
                     stats[threshold]['overmapped_cont'] += 1
                 elif read_origin == "e":
                     stats[threshold]['nr_aligned'] += 1
+                    if truth.is_deaminated:
+                        stats[threshold]['nr_aligned_deam'] += 1
 
                     if is_overlap:
                         stats[threshold]['correct'] += 1
+                        if truth.is_deaminated:
+                            stats[threshold]['correct_deam'] += 1
                     stats[threshold]['correct_jaccard'] += jacc
                 
     results = {}
@@ -344,6 +367,8 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
             n=s['n'],
             aligned=s['nr_aligned'],
             correct=s['correct'],
+            aligned_deam=s['nr_aligned_deam'],
+            correct_deam=s['correct_deam'],
             jaccard_correct=s['correct_jaccard'],
             score_correct=(s['correct_score'] + s['correct']),
             overmapped_bact=s['overmapped_bact'],
