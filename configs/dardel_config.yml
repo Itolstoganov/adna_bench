@@ -14,29 +14,56 @@ datasets:
   #   proportions: [0.7, 0.00, 0.3]  # [endogenous, contaminant, bacterial] 
 
   # Example range specification 
-  - name: "chm13_variations"
+  - name: "chm13"
     endogenous_genome: "CHM13"
     contaminant_genome: "CHM13"
-    endogenous_variation: ["var3", "var4"]
+    endogenous_variation: ["var3", "var5"]
     bacterial_db: "k14"
     read_length: [40]
-    proportions: [0.7, 0.00, 0.3]
+    proportions: [0.2, 0.00, 0.8]
     # proportions: [[0.6, 0.05, 0.35], [0.8, 0.05, 0.15]]  # Multiple proportion combinations
 
 # Gargammel simulation parameters
 num_reads: 100000
 
+# Accuracy evaluation parameters
+score_thresholds: [60, 70, 80]
+k: [15, 17, 21, 25, 31]
+# k: [13, 15, 17, 19, 21, 25, 31]
+main_score_threshold: 60
+main_k: 19
+
 # Alignment parameters
 versions:
-  - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
+  - commit: "3e42bf04040e5f8bdb57c664691b8dac51bd1714"
     color: "yellow"
-    name: "strobealign aDNA"
-    arguments: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
+    name: "--adna --ssw"
+    arguments: "--adna --ry-len 8 --mcs=always --ssw"
 
-  - commit: "15e43182765c3a13a1049c0b7eb07fd60074d8d8"
+  - commit: "5ebb94d4f3f36cde9dacd95826659a53bd1a9e3e"
     color: "red"
-    name: "strobealign main (15e4318)"
-    arguments: "--mcs=always -S 0.95 -r 30 -k 12"
+    name: "main (5ebb94d)"
+    arguments: "--mcs=always"
+
+  - commit: "3e42bf04040e5f8bdb57c664691b8dac51bd1714"
+    color: "green"
+    name: "--adna -M 100 --ssw"
+    arguments: "--adna --ry-len 8 --mcs=always --ssw -M 100"
+
+  - commit: "3e42bf04040e5f8bdb57c664691b8dac51bd1714"
+    color: "green"
+    name: "-l 1 -u 1 -M 20"
+    arguments: "-l 1 -u 1 -M 20"
+
+  # - commit: "worktree_ry_len"
+  #   color: "green"
+  #   name: "--adna --mcs=rescue"
+  #   arguments: "--adna --ry-len 8 --mcs=rescue --ssw -M 20"
+
+  # - commit: "worktree_ry_len"
+  #   color: "green"
+  #   name: "--adna -M 20"
+  #   arguments: "--adna --ry-len 8 --mcs=always --ssw"
 
 programs:
  - bwaaln

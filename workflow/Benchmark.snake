@@ -6,7 +6,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, accuracy_tables, resource_tables, k_plots
+    plots, resources, accuracy_tables, resource_tables, k_plots, combined_k_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -75,11 +75,11 @@ K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS]
 
 rule final:
     input:
-        expand("csv/{prog}/{dataset_id}/se.bam.resources.csv", prog=PROGRAMS, dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
-        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else []
+        expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else [],
+        "result/combined_k_plots.pdf" if HAS_MULTI_K else []
 
 
 rule run_adna_accuracy:
@@ -208,6 +208,27 @@ rule k_plots:
         threshold=config.get("main_score_threshold", 60)
     shell:
         "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold}"
+
+
+def _combined_dataset_label(dataset_id):
+    """Row label for the combined PDF: dataset minus the variation suffix."""
+    cfg = DATASET_CONFIGS[dataset_id]
+    return f"{cfg['endogenous_genome']}_{cfg['contaminant_genome']}_{cfg['bacterial_db']}_len{cfg['read_length']}"
+
+
+rule combined_k_plots:
+    output:
+        "result/combined_k_plots.pdf"
+    input:
+        accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS)
+    params:
+        threshold=config.get("main_score_threshold", 60),
+        dataset_args=lambda wildcards, input: " ".join(
+            f"--dataset {d} {p} {_combined_dataset_label(d)} {DATASET_CONFIGS[d]['endogenous_variation']}"
+            for d, p in zip(DATASET_IDS, input.accuracy)
+        )
+    shell:
+        "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args}"
 
 
 rule resources:
