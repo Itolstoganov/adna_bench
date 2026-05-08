@@ -21,7 +21,7 @@ for version in config.get("versions", []):
     for k in k_values:
         arg = version.get("arguments", "")
         if k is not None:
-            full_arg = f"{arg} -k {k} -s {k + syncmer_density - 1}" if arg else f"-k {k}"
+            full_arg = f"{arg} -k {k} -s {k - syncmer_density + 1}" if arg else f"-k {k}"
         else:
             full_arg = arg
         key = version["commit"]
