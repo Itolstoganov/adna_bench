@@ -15,12 +15,13 @@ DATASET_CONFIGS = expand_datasets(config.get("datasets", []))
 DATASET_IDS = list(DATASET_CONFIGS.keys())
 
 k_values = config.get("k", [None])
+syncmer_density = config.get("syncmer_density", 5)
 VERSIONS = {}
 for version in config.get("versions", []):
     for k in k_values:
         arg = version.get("arguments", "")
         if k is not None:
-            full_arg = f"{arg} -k {k}" if arg else f"-k {k}"
+            full_arg = f"{arg} -k {k} -s {k + syncmer_density - 1}" if arg else f"-k {k}"
         else:
             full_arg = arg
         key = version["commit"]
