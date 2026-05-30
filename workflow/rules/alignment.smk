@@ -135,10 +135,11 @@ rule bwa_mem_single_end:
     log:
         "runs/bwamem/{dataset_id}/se.bam.log"
     params:
-        adna="-k 15 -r 2.5"
+        adna="-k 15 -r 2.5",
+        secondary=lambda wildcards: "-a" if SECONDARY_ACCURACY else ""
     shell:
         "cat {input} > /dev/null; "
-        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
+        "/usr/bin/time -v bwa mem -t {threads} {params.secondary} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
@@ -178,10 +179,11 @@ rule bwa_mem_k_single_end:
     log:
         "runs/bwamem-k{k}/{dataset_id}/se.bam.log"
     params:
-        adna=lambda wildcards: f"-k {wildcards.k} -r 2.5"
+        adna=lambda wildcards: f"-k {wildcards.k} -r 2.5",
+        secondary=lambda wildcards: "-a" if SECONDARY_ACCURACY else ""
     shell:
         "cat {input} > /dev/null; "
-        "/usr/bin/time -v bwa mem -t {threads} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
+        "/usr/bin/time -v bwa mem -t {threads} {params.secondary} {params.adna} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"
@@ -252,13 +254,14 @@ rule strobealign_single_end:
         fasta="datasets/{dataset_id}/ref.fa",
         r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
     params:
-        extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
+        extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"],
+        secondary=lambda wildcards: strobealign_secondary_args(VERSIONS[wildcards.program]["arguments"])
     threads: 8
     log:
         "runs/strobealign-{program}/{dataset_id}/se.bam.log"
     shell:
         "cat {input} > /dev/null; "
-        "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
+        "/usr/bin/time -v {input.binary}{params.extra_args}{params.secondary} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
         " | grep -v '^@PG'"
         " | samtools view --no-PG -o {output.bam}.tmp.bam -"
         "\n mv -v {output.bam}.tmp.bam {output.bam}"

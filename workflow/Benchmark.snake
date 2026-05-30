@@ -69,6 +69,42 @@ ACCURACY_METRICS = [
     "mapped_bacterial",
     "mapped_contaminated",
 ]
+
+# Optional secondary-alignment accuracy (off by default). Toggled via config or `run.py --secondary-accuracy`.
+SECONDARY_ACCURACY = str(config.get("secondary_accuracy", False)).strip().lower() in ("1", "true", "yes", "on")
+SECONDARY_N = config.get("secondary_n", 100)
+SECONDARY_M = config.get("secondary_m", 100)
+SECONDARY_S = config.get("secondary_s", 0.5)
+# Single source of truth for the secondary metrics: (table column, plot slug).
+# Mirrors SECONDARY_METRICS in scripts/plots.py.
+SECONDARY_METRICS = [
+    ("% Accuracy with secondary (endogenous only)", "accuracy_secondary"),
+    ("% Accuracy with secondary (deaminated endogenous only)", "accuracy_secondary_deam"),
+]
+SECONDARY_METRIC_COLUMNS = [column for column, _slug in SECONDARY_METRICS]
+if SECONDARY_ACCURACY:
+    ACCURACY_METRICS = ACCURACY_METRICS + [slug for _column, slug in SECONDARY_METRICS]
+
+
+def secondary_applicable(prog):
+    # secondary accuracy is not meaningful for bwaaln / safari
+    return prog.startswith("strobealign") or prog.startswith("bwamem")
+
+
+def strobealign_secondary_args(version_args):
+    """Flags to make strobealign emit secondaries. -N is upper-bounded by -M and
+    depends on -S; only add -M/-S when the version doesn't already set them."""
+    if not SECONDARY_ACCURACY:
+        return ""
+    tokens = version_args.split()
+    parts = [f"-N {SECONDARY_N}"]
+    if "-M" not in tokens:
+        parts.append(f"-M {SECONDARY_M}")
+    if "-S" not in tokens:
+        parts.append(f"-S {SECONDARY_S}")
+    return " " + " ".join(parts)
+
+
 # Accuracy metrics get both non-k (vs score threshold) and k plots.
 # Resource metrics (runtime, memory) are k-metrics only (line vs k).
 PLOT_METRICS = ACCURACY_METRICS
@@ -94,7 +130,9 @@ rule run_adna_accuracy:
         bam="runs/{prog}/{dataset_id}/se.bam"
     params:
         thresholds=SCORE_THRESHOLDS,
-        recompute_as = lambda wildcards: False if wildcards.prog.startswith("strobealign") else True
+        recompute_as = lambda wildcards: False if wildcards.prog.startswith("strobealign") else True,
+        secondary_emit = SECONDARY_ACCURACY,
+        secondary_compute = lambda wildcards: SECONDARY_ACCURACY and secondary_applicable(wildcards.prog)
     script:
         "scripts/adna_accuracy.py"
 
@@ -129,7 +167,7 @@ rule accuracy_tables:
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow([
+            header = [
                 "Tool",
                 "Base Name",
                 "k",
@@ -140,7 +178,10 @@ rule accuracy_tables:
                 "% Accuracy (deaminated endogenous only)",
                 "% Mapped bacterial reads",
                 "% Mapped contaminated reads"
-            ])
+            ]
+            if SECONDARY_ACCURACY:
+                header += SECONDARY_METRIC_COLUMNS
+            writer.writerow(header)
 
             for prog, input_file in zip(params.programs, input):
                 info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})

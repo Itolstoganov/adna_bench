@@ -9,6 +9,8 @@ datasets:
 
 num_reads: 5000
 score_thresholds: [25, 30, 35, 40]
+# Optional secondary-alignment accuracy (off by default; see configs/config.yaml).
+secondary_accuracy: false
 
 versions:
   - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"

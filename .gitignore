@@ -1,6 +1,6 @@
 bin
 configs/config.yaml
-configs/dardel_config.yaml
+configs/dardel_config.yml
 gargammel_data
 datasets
 reads

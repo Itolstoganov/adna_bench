@@ -53,9 +53,12 @@ class AccuracyPercentages:
     jaccard_correct: float
     overmapped_bact: int
     overmapped_cont: int
+    # secondary-alignment accuracy; "" when the metric is emitted but not computed
+    correct_secondary: float | str = ""
+    correct_secondary_deam: float | str = ""
 
-    def row(self):
-        return (
+    def row(self, include_secondary=False):
+        base = (
             self.aligned,
             self.correct,
             self.aligned_deam,
@@ -66,6 +69,9 @@ class AccuracyPercentages:
             # self.jaccard_correct,
             # self.score_correct if self.score_correct is not None else "",
         )
+        if include_secondary:
+            base = base + (self.correct_secondary, self.correct_secondary_deam)
+        return base
 
 
 @dataclass
@@ -80,6 +86,9 @@ class Accuracy:
     overmapped_bact: int
     overmapped_cont: int
     origin_count: dict
+    correct_secondary: int = 0
+    correct_secondary_deam: int = 0
+    secondary_computed: bool = False
 
     def percentages(self) -> AccuracyPercentages:
         endo = self.origin_count.get("e", 0)
@@ -93,6 +102,8 @@ class Accuracy:
             overmapped_cont=100 * self.overmapped_cont / self.origin_count["c"] if self.origin_count["c"] > 0 else 0,
             jaccard_correct=round(100 * self.jaccard_correct / self.n, 5),
             score_correct=100 * self.score_correct / self.n if self.score_correct is not None else "",
+            correct_secondary=(100 * self.correct_secondary / endo if endo > 0 else 0) if self.secondary_computed else "",
+            correct_secondary_deam=(100 * self.correct_secondary_deam / endo_deam if endo_deam > 0 else 0) if self.secondary_computed else "",
         )
 
 
@@ -100,15 +111,16 @@ class Accuracy:
 class AccuracyResults:
     thresholds: List[int]
     results: Dict[int, Accuracy]
+    emit_secondary: bool = False
 
     def rows(self):
         for threshold in self.thresholds:
-            yield (threshold, *self.results[threshold].percentages().row())
+            yield (threshold, *self.results[threshold].percentages().row(self.emit_secondary))
 
     def to_tsv(self):
         lines = []
         for threshold in self.thresholds:
-            row = [str(threshold)] + [str(x) for x in self.results[threshold].percentages().row()]
+            row = [str(threshold)] + [str(x) for x in self.results[threshold].percentages().row(self.emit_secondary)]
             lines.append('\t'.join(row))
         return '\n'.join(lines)
     
@@ -270,7 +282,8 @@ def filter_bam(alignment_file):
             yield record
             
 
-def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=True) -> AccuracyResults:
+def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=True,
+                   compute_secondary=False) -> AccuracyResults:
     """
     Compute accuracy statistics for multiple score thresholds in a single pass.
 
@@ -278,6 +291,9 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
         gt_path: Path to ground truth BED file
         predicted: BAM file iterator
         score_thresholds: List of score thresholds to evaluate
+        compute_secondary: also compute secondary-alignment accuracy (a read is
+            correct if any secondary alignment tied on AS with the primary
+            overlaps the truth)
 
     Returns:
         AccuracyResults object with stats for each threshold
@@ -293,7 +309,9 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
             'correct': 0,
             'correct_deam': 0,
             'correct_jaccard': 0.0,
-            'correct_score': 0
+            'correct_score': 0,
+            'correct_secondary': 0,
+            'correct_secondary_deam': 0,
         }
 
     unscored = 0
@@ -311,24 +329,50 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
                 ref_name, read_origin, int(start_pos), int(end_pos), is_deaminated
             )
 
-    for p in filter_bam(predicted):
+    # for the secondary metric: per-read primary info and the best AS among
+    # secondary alignments that overlap the truth
+    primary_info = {}
+    sec_best_correct_as = {}
+
+    for p in predicted:
+        if p.is_supplementary:
+            continue
         query_name = p.query_name
         if query_name.endswith("/1"):
             query_name = query_name[:-2]
         if query_name not in ground_truth:
-            print(f"{query_name} is not present in ground truth")
+            if not p.is_secondary:
+                print(f"{query_name} is not present in ground truth")
             continue
 
         truth = ground_truth[query_name]
+
+        if p.is_secondary:
+            # only endogenous reads contribute to accuracy; record the best AS
+            # among secondaries that overlap the truth on the same chromosome
+            if not compute_secondary or truth.origin != "e" or p.is_unmapped:
+                continue
+            if truth.name != p.reference_name or not p.has_tag("AS"):
+                continue
+            try:
+                if overlap(p.reference_start, p.reference_end, truth.start, truth.end):
+                    as_tag = p.get_tag("AS")
+                    if as_tag > sec_best_correct_as.get(query_name, float("-inf")):
+                        sec_best_correct_as[query_name] = as_tag
+            except Exception:
+                pass
+            continue
+
         read_origin = truth.origin
 
+        as_tag = None
         try:
             as_tag = p.get_tag("AS") if p.has_tag("AS") else None
             recompute_score = always_recompute_as or (not as_tag)
             score = recompute_alignment_score(p, Scores) if recompute_score else as_tag
         except:
             unscored += 1
-            score = min(score_thresholds) - 1  
+            score = min(score_thresholds) - 1
 
         jacc = 0.0
         is_overlap = False
@@ -359,7 +403,26 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
                         if truth.is_deaminated:
                             stats[threshold]['correct_deam'] += 1
                     stats[threshold]['correct_jaccard'] += jacc
-                
+
+        if compute_secondary:
+            primary_info[query_name] = (
+                as_tag, score, is_overlap, read_origin, truth.is_deaminated, not p.is_unmapped
+            )
+
+    if compute_secondary:
+        for qname, (p_as, score, p_overlap, origin, is_deam, mapped) in primary_info.items():
+            if origin != "e" or not mapped:
+                continue
+            # correct if the primary overlaps, or a secondary tied on AS overlaps
+            tied_correct = p_overlap or (p_as is not None and sec_best_correct_as.get(qname) == p_as)
+            if not tied_correct:
+                continue
+            for threshold in score_thresholds:
+                if score >= threshold:
+                    stats[threshold]['correct_secondary'] += 1
+                    if is_deam:
+                        stats[threshold]['correct_secondary_deam'] += 1
+
     results = {}
     for threshold in score_thresholds:
         s = stats[threshold]
@@ -373,7 +436,10 @@ def get_iter_stats(gt_path, predicted, score_thresholds, always_recompute_as=Tru
             score_correct=(s['correct_score'] + s['correct']),
             overmapped_bact=s['overmapped_bact'],
             overmapped_cont=s['overmapped_cont'],
-            origin_count=origin_count
+            origin_count=origin_count,
+            correct_secondary=s['correct_secondary'],
+            correct_secondary_deam=s['correct_secondary_deam'],
+            secondary_computed=compute_secondary,
         )
 
     return AccuracyResults(thresholds=score_thresholds, results=results)
@@ -382,11 +448,17 @@ def measure_accuracy(
     ground_truth: Path,
     predicted: Path,
     score_thresholds: List[int],
-    recompute_score: bool
+    recompute_score: bool,
+    compute_secondary: bool = False,
+    emit_secondary: bool = False,
 ) -> AccuracyResults:
     with (AlignmentFile(predicted) as predicted):
-        result = get_iter_stats(ground_truth, predicted, score_thresholds, always_recompute_as=recompute_score)
-
+        result = get_iter_stats(
+            ground_truth, predicted, score_thresholds,
+            always_recompute_as=recompute_score,
+            compute_secondary=compute_secondary,
+        )
+    result.emit_secondary = emit_secondary
     return result
 
 
@@ -396,7 +468,9 @@ if "snakemake" in dir():
         snakemake.input.gt,
         snakemake.input.bam,
         snakemake.params.thresholds,
-        snakemake.params.recompute_as
+        snakemake.params.recompute_as,
+        compute_secondary=getattr(snakemake.params, "secondary_compute", False),
+        emit_secondary=getattr(snakemake.params, "secondary_emit", False),
     )
     with open(snakemake.output[0], "w") as f:
         f.write(accuracy_results.to_tsv())
@@ -414,6 +488,7 @@ elif __name__ == "__main__":
     parser.add_argument("--ground-truth", type=Path, help="Path to ground truth alignments (in .bed format)")
     parser.add_argument("--predicted", "--predicted_sam", "--predicted_paf", type=Path, help="Predicted SAM/BAM/PAF")
     parser.add_argument("--score-thresholds", type=int, nargs='+', default=[25, 30, 35, 40, 45], help="Score thresholds to evaluate")
+    parser.add_argument("--secondary", default=False, action="store_true", help="Also compute secondary-alignment accuracy (requires secondary alignments in the predicted BAM)")
     parser.add_argument("--outfile", help="Path to file")
     args = parser.parse_args()
 
@@ -421,6 +496,9 @@ elif __name__ == "__main__":
         parser.print_help()
         sys.exit()
 
-    accuracy_results = measure_accuracy(args.ground_truth, args.predicted, args.score_thresholds, args.recompute_score)
+    accuracy_results = measure_accuracy(
+        args.ground_truth, args.predicted, args.score_thresholds, args.recompute_score,
+        compute_secondary=args.secondary, emit_secondary=args.secondary,
+    )
 
     print(accuracy_results.to_tsv())

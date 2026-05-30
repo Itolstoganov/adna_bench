@@ -17,6 +17,17 @@ METRICS = [
     ("% Mapped contaminated reads", "mapped_contaminated"),
 ]
 
+# Optional secondary-alignment accuracy. Detected by column presence in the table.
+SECONDARY_METRICS = [
+    ("% Accuracy with secondary (endogenous only)", "accuracy_secondary"),
+    ("% Accuracy with secondary (deaminated endogenous only)", "accuracy_secondary_deam"),
+]
+
+
+def with_secondary_if_present(base_metrics, df):
+    """Append the secondary metrics whose columns exist in `df` (enabled runs only)."""
+    return base_metrics + [m for m in SECONDARY_METRICS if m[0] in df.columns]
+
 # Resource metrics are k-metrics only (line vs k); column, file slug, plot title.
 RESOURCE_METRICS = [
     ("Mapping Time (s)", "k_runtime", "Mapping Time"),
@@ -239,9 +250,13 @@ def plot_combined_k_pdf(dataset_inputs, output_path, score_threshold):
     res_df = _build_combined_frame(
         [(res, row, col) for _, _acc, res, row, col in dataset_inputs],
     )
+    combined_metrics = COMBINED_K_METRICS
+    if acc_df is not None:
+        combined_metrics = with_secondary_if_present(combined_metrics, acc_df)
+
     with PdfPages(output_path) as pdf:
         if acc_df is not None and not acc_df.empty:
-            for metric_col, _ in COMBINED_K_METRICS:
+            for metric_col, _ in combined_metrics:
                 plot_xy(acc_df, x="k", y=metric_col, pdf=pdf,
                         hue="Display", baseline=True,
                         row="dataset_row", col="dataset_col", title=metric_col)
@@ -284,10 +299,13 @@ def main():
     res_df = pd.read_csv(args.resources, sep="\t") if args.resources else None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # secondary-accuracy metrics are plotted only when present in the table
+    metrics = with_secondary_if_present(METRICS, df)
+
     if args.k_plot:
         # metric vs k, at a single score threshold; k-less tools as dashed lines
         score_filter = score_eq(args.score_threshold)
-        for col_name, file_name in METRICS:
+        for col_name, file_name in metrics:
             plot_xy(df, x="k", y=col_name,
                     output_path=args.output_dir / f"k_{file_name}.png",
                     filter=score_filter, hue="Base Name", baseline_hue="Tool",
@@ -302,7 +320,7 @@ def main():
     else:
         # metric vs score threshold, at a single k (resource metrics are k-only)
         k_filter = k_eq(args.k)
-        for col_name, file_name in METRICS:
+        for col_name, file_name in metrics:
             plot_xy(df, x="Score Threshold", y=col_name,
                     output_path=args.output_dir / f"{file_name}.png",
                     filter=k_filter, hue="Tool", baseline=False, title=col_name)
