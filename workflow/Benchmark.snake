@@ -69,10 +69,13 @@ ACCURACY_METRICS = [
     "mapped_bacterial",
     "mapped_contaminated",
 ]
-PLOT_METRICS = ACCURACY_METRICS + ["runtime", "user_time"]
+# Accuracy metrics get both non-k (vs score threshold) and k plots.
+# Resource metrics (runtime, memory) are k-metrics only (line vs k).
+PLOT_METRICS = ACCURACY_METRICS
+RESOURCE_K_METRICS = ["k_runtime", "k_memory"]
 SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
-K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS]
+K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS] + RESOURCE_K_METRICS
 
 rule final:
     input:
@@ -176,15 +179,15 @@ rule resource_tables:
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)", "User Time (s)"])
+            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)", "Peak Memory (GB)"])
 
             for prog, res_file in zip(params.programs, input):
                 info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})
                 with open(res_file) as f:
-                    fields = f.read().strip().split(",")
-                    mapping_time = fields[6] if len(fields) > 6 else ""
-                    user_time = fields[8] if len(fields) > 8 else ""
-                    writer.writerow([info["name"], info["base_name"], info["k"], mapping_time, user_time])
+                    row = next(csv.DictReader(f))
+                mapping_time = row.get("mapping_time", "")
+                memory = row.get("memory_gb", "")
+                writer.writerow([info["name"], info["base_name"], info["k"], mapping_time, memory])
 
 
 rule plots:
@@ -221,12 +224,13 @@ rule combined_k_plots:
     output:
         "result/combined_k_plots.pdf"
     input:
-        accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS)
+        accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS)
     params:
         threshold=config.get("main_score_threshold", 60),
         dataset_args=lambda wildcards, input: " ".join(
-            f"--dataset {d} {p} {_combined_dataset_label(d)} {DATASET_CONFIGS[d]['endogenous_variation']}"
-            for d, p in zip(DATASET_IDS, input.accuracy)
+            f"--dataset {d} {acc} {res} {_combined_dataset_label(d)} {DATASET_CONFIGS[d]['endogenous_variation']}"
+            for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
         )
     shell:
         "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args}"
@@ -243,14 +247,21 @@ rule resources:
         read_len=lambda wc: f"genomes/{get_dataset_param(wc, 'read_length')}"
     shell:
         """
-        echo -n {wildcards.prog},{params.typ},{params.genome},{wildcards.ends},{params.read_len}, > {output.csv}.tmp
+        # user time and peak memory come from `/usr/bin/time -v` for every tool
         user_time=$(awk '/User time/ {{print $NF}}' {input.log})
         memory=$(awk '/Maximum resident/ {{print $NF/1048576}}' {input.log})
-        indexing_time=$(awk '/Total time indexing:/ {{print $4}}' {input.log})
+
+        # Mapping (wall-clock) time is parsed from each tool's own log output.
+        # The patterns are tried in order; the first non-empty match is used:
+        #   strobealign (all strobealign-* variants): "Total time mapping: <s> s"
         mapping_time=$(awk '/Total time mapping:/ {{print $4}}' {input.log})
+        #   bwa mem / bwa aln: "[main] Real time: <s> sec; CPU: ..."
         if test -z "${{mapping_time}}"; then mapping_time=$(sed -n -e 's|.* Real time: \\([0-9][0-9.]*\\) sec.*|\\1|p' {input.log}); fi
+        #   generic fallback for any tool wrapped in `/usr/bin/time -v`:
+        #   "Elapsed (wall clock) time (h:mm:ss or m:ss): <t>"
         if test -z "${{mapping_time}}"; then mapping_time=$(awk '/Elapsed \(wall clock\)/ {{split($NF, a, ":"); if (length(a)==3) print a[1]*3600+a[2]*60+a[3]; else print a[1]*60+a[2]}}' {input.log}); fi
-        if test -z "${{mapping_time}}"; then mapping_time=$(awk '/^Processing query/ && $3 >= 10000 && t == 0 {{t=substr($5, 1, length($5)-1);}}; /^Done in/ {{total=substr($3, 1, length($3)-2)}}; END{{if (total) print total-t}}' {input.log}); fi
-        echo ,${{mapping_time}},${{memory}},${{user_time}} >> {output}.tmp
+
+        echo "prog,type,genome,ends,read_length,mapping_time,memory_gb,user_time" > {output.csv}.tmp
+        echo "{wildcards.prog},{params.typ},{params.genome},{wildcards.ends},{params.read_len},${{mapping_time}},${{memory}},${{user_time}}" >> {output.csv}.tmp
         mv {output.csv}.tmp {output.csv}
         """
