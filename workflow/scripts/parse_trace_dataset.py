@@ -19,12 +19,10 @@ on stderr:
 For every read this script records:
   1. number of full seed hits with >=1 index occurrence
   2. number of partial (rymer) seed hits with >=1 index occurrence
-  3. full-hit occurrence-count distribution (per-read multiset)
-  4. partial-hit occurrence-count distribution
-  5. full-hit query-position distribution
-  6. partial-hit query-position distribution
-  7. read deamination positions (decoded from the gargammel read name)
-  8. whether a chain (NAM) overlaps the read's ground-truth position, and whether
+  3. full matches as a list of `query_pos:occurrence_count` pairs
+  4. partial matches as a list of `query_pos:occurrence_count` pairs
+  5. read deamination positions (decoded from the gargammel read name)
+  6. whether a chain (NAM) overlaps the read's ground-truth position, and whether
      that correct chain is one of the highest-scoring chains for the read
      (correct_chain_is_top -> the read is "accurately mapped").
 
@@ -201,6 +199,11 @@ def join_ints(values) -> str:
     return ",".join(str(v) for v in values)
 
 
+def join_matches(hits) -> str:
+    """List of `query_pos:occurrence_count` pairs, comma-separated."""
+    return ",".join(f"{h.query_start}:{h.count}" for h in hits)
+
+
 def find_correct_chain(
     nams: List[Nam], ref_names: List[str], gt: Tuple[str, int, int, str, str]
 ) -> Optional[Nam]:
@@ -240,8 +243,7 @@ COLUMNS = [
     "read_name", "read_len", "origin", "is_deaminated",
     "gt_chrom", "gt_start", "gt_end", "gt_strand",
     "n_full", "n_partial",
-    "full_count_dist", "partial_count_dist",
-    "full_pos_dist", "partial_pos_dist",
+    "full_matches", "partial_matches",
     "deam_positions",
     "has_correct_chain", "correct_chain_is_top", "chain_ref", "chain_score",
 ]
@@ -271,10 +273,8 @@ def build_row(
         "gt_strand": gt[3] if gt else "",
         "n_full": len(full_hits),
         "n_partial": len(partial_hits),
-        "full_count_dist": join_ints(h.count for h in full_hits),
-        "partial_count_dist": join_ints(h.count for h in partial_hits),
-        "full_pos_dist": join_ints(h.query_start for h in full_hits),
-        "partial_pos_dist": join_ints(h.query_start for h in partial_hits),
+        "full_matches": join_matches(full_hits),
+        "partial_matches": join_matches(partial_hits),
         "deam_positions": join_ints(deam),
         "has_correct_chain": 0,
         "correct_chain_is_top": 0,
@@ -313,8 +313,8 @@ def build_row(
 CATEGORIES = [
     ("all reads", lambda s: True),
     ("deaminated reads", lambda s: s.is_deaminated),
-    ("non-deam, accurately mapped", lambda s: not s.is_deaminated and s.is_accurate),
-    ("deam, accurately mapped", lambda s: s.is_deaminated and s.is_accurate),
+    ("non-deam, top correct chain", lambda s: not s.is_deaminated and s.is_accurate),
+    ("deam, top correct chain", lambda s: s.is_deaminated and s.is_accurate),
     ("non-deam, unmapped/incorrect", lambda s: not s.is_deaminated and not s.is_accurate),
     ("deam, unmapped/incorrect", lambda s: s.is_deaminated and not s.is_accurate),
 ]
