@@ -27,10 +27,28 @@ rule all:
         expand("datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
 
 
-rule simulate_genomes:
-    input:
-        ref="genomes/{genome}.fa"
-    
+# rule simulate_genomes:
+#     input:
+#         ref="genomes/{genome}.fa"
+
+
+# from https://github.com/NBISweden/strobealign-evaluation 
+rule download_ecoli50:
+    output:
+        "downloads/ecoli50/done.txt"
+    input: "workflow/data/ecoli-accessions.txt"
+    shell:
+        "mkdir -p downloads/ecoli50; "
+        "head -n 50 {input} > downloads/ecoli50/accessions.txt; "
+        "ncbi-genome-download -o downloads/ecoli50 -A downloads/ecoli50/accessions.txt --formats fasta --flat-output bacteria; "
+        "touch downloads/ecoli50/done.txt"
+
+rule filter_ecoli50:
+    output: "genomes/ecoli50.fa"
+    input: "downloads/ecoli50/done.txt"
+    shell:
+        "python {SCRIPTS}/noplasmids.py downloads/ecoli50/*.fna.gz > {output}"
+
 
 rule mason_variator:
     output:
