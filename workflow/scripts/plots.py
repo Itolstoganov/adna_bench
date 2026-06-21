@@ -267,6 +267,164 @@ def plot_combined_k_pdf(dataset_inputs, output_path, score_threshold):
                         row="dataset_row", col="dataset_col", title=title)
 
 
+# --- summary plots (datasets on x axis) --------------------------------------
+
+def _build_short_names(triples):
+    """Build shortened dataset labels `genome|read_len|variation`.
+
+    `triples` is a list of (genome, read_length, variation). The read length and
+    variation components are omitted when every dataset shares the same value, so
+    e.g. with a single read length the label becomes `CHM13|var3`.
+    """
+    read_lens = {rl for _g, rl, _v in triples}
+    variations = {v for _g, _rl, v in triples}
+    include_rl = len(read_lens) > 1
+    include_var = len(variations) > 1
+    names = []
+    for genome, read_len, variation in triples:
+        parts = [str(genome)]
+        if include_rl:
+            parts.append(str(read_len))
+        if include_var:
+            parts.append(str(variation))
+        names.append("|".join(parts))
+    return names
+
+
+def _build_summary_frame(pairs, *, k=None, score_threshold=None):
+    """Concatenate per-dataset tables tagged with a short dataset label.
+
+    `pairs` is a list of (path, short_name). Rows are filtered to a single k
+    (keeping k-less tools, whose k is NaN) and, for accuracy tables, to a single
+    score threshold.
+    """
+    frames = []
+    for path, short_name in pairs:
+        df = pd.read_csv(path, sep="\t")
+        if score_threshold is not None and "Score Threshold" in df.columns:
+            df = df[df["Score Threshold"] == score_threshold]
+        if k is not None:
+            df = df[(df["k"] == k) | (df["k"].isna())]
+        df = df.copy()
+        df["dataset"] = short_name
+        frames.append(df)
+    if not frames:
+        return None
+    df = pd.concat(frames, ignore_index=True)
+    is_k_aware = df["k"].notna()
+    df["Display"] = df["Base Name"].where(is_k_aware, df["Tool"])
+    return df
+
+
+# Tool treated as the reference for delta (difference) plots.
+SUMMARY_DELTA_BASELINE = "bwaaln"
+
+# Friendlier metric labels for summary plot titles / axes. Keys are the table
+# column names; everything not listed is shown verbatim.
+SUMMARY_METRIC_LABELS = {
+    "% Accuracy (endogenous only)": "% Accuracy",
+    "% Accuracy (deaminated endogenous only)": "% Accuracy (deaminated reads only)",
+}
+
+
+def _summary_label(col):
+    return SUMMARY_METRIC_LABELS.get(col, col)
+
+
+def _apply_delta(df, y, baseline):
+    """Subtract `baseline`'s per-dataset value of `y` from every row.
+
+    Returns a copy with `y` replaced by the difference to the baseline tool. Rows
+    of datasets where the baseline is absent get NaN and are dropped downstream.
+    """
+    base = (df[df["Display"] == baseline][["dataset", y]]
+            .rename(columns={y: "__base"}))
+    merged = df.merge(base, on="dataset", how="left").copy()
+    merged[y] = merged[y] - merged["__base"]
+    return merged.drop(columns="__base")
+
+
+def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
+                        title=None, delta_baseline=None):
+    """Point/line plot of metric `y` with datasets on the x axis, one line per tool.
+
+    When `delta_baseline` is set, values are plotted as the difference to that
+    tool (a dashed line marks zero). The figure is written to `pdf` and/or
+    `png_path` (both may be given to emit the same plot to each).
+    """
+    if y not in df.columns:
+        return
+    if delta_baseline is not None:
+        df = _apply_delta(df, y, delta_baseline)
+    sub = df[df[y].notna()]
+    if sub.empty:
+        return
+    names = list(dict.fromkeys(sub["Display"]))
+    palette = _palette(names)
+    plt.figure(figsize=(max(10, len(dataset_order) * 1.2), 6))
+    if delta_baseline is not None:
+        plt.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+    sns.pointplot(data=sub, x="dataset", y=y, hue="Display",
+                  order=dataset_order, hue_order=names, palette=palette,
+                  errorbar=None)
+    label = _summary_label(y)
+    plt.xlabel("Dataset")
+    plt.ylabel(f"Δ {label} (vs {delta_baseline})" if delta_baseline is not None else label)
+    plt.title(title if title is not None else y)
+    plt.xticks(rotation=45, ha="right")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    if pdf is not None:
+        pdf.savefig(bbox_inches="tight")
+    if png_path is not None:
+        plt.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def plot_summary_pdf(summary_inputs, output_path, k, score_threshold, png_dir=None):
+    # summary_inputs: list of (NAME, ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION)
+    short_names = _build_short_names(
+        [(genome, read_len, var) for _n, _a, _r, genome, read_len, var in summary_inputs]
+    )
+    dataset_order = list(dict.fromkeys(short_names))
+    acc_df = _build_summary_frame(
+        [(acc, short) for (_n, acc, _r, *_), short in zip(summary_inputs, short_names)],
+        k=k, score_threshold=score_threshold,
+    )
+    res_df = _build_summary_frame(
+        [(res, short) for (_n, _a, res, *_), short in zip(summary_inputs, short_names)],
+        k=k,
+    )
+    metrics = METRICS
+    if acc_df is not None:
+        metrics = with_secondary_if_present(metrics, acc_df)
+
+    if png_dir is not None:
+        png_dir.mkdir(parents=True, exist_ok=True)
+
+    def png_path(slug):
+        return png_dir / f"{slug}.png" if png_dir is not None else None
+
+    with PdfPages(output_path) as pdf:
+        if acc_df is not None and not acc_df.empty:
+            # absolute values
+            for metric_col, slug in metrics:
+                plot_summary_metric(acc_df, metric_col, dataset_order, pdf=pdf,
+                                    png_path=png_path(slug),
+                                    title=_summary_label(metric_col))
+            # delta vs the default tool
+            for metric_col, slug in metrics:
+                plot_summary_metric(
+                    acc_df, metric_col, dataset_order, pdf=pdf,
+                    png_path=png_path(f"{slug}_delta"),
+                    title=f"{_summary_label(metric_col)} (Δ vs {SUMMARY_DELTA_BASELINE})",
+                    delta_baseline=SUMMARY_DELTA_BASELINE)
+        if res_df is not None and not res_df.empty:
+            for y_col, slug, title in RESOURCE_METRICS:
+                plot_summary_metric(res_df, y_col, dataset_order, pdf=pdf,
+                                    png_path=png_path(slug), title=title)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path)
@@ -283,6 +441,20 @@ def main():
                         help="Dataset name, accuracy table path, resource table "
                              "path, row label, column label (repeatable, used "
                              "with --combined-pdf).")
+    parser.add_argument("--summary-pdf", type=Path,
+                        help="Write a single PDF with one summary plot per metric, "
+                             "datasets on the x axis (at --main-k), then exit.")
+    parser.add_argument("--summary-png-dir", type=Path,
+                        help="Also write each summary plot as a PNG into this "
+                             "directory (used with --summary-pdf).")
+    parser.add_argument("--main-k", type=int,
+                        help="k value selected for the summary plots.")
+    parser.add_argument("--summary-dataset", nargs=6, action="append", default=[],
+                        metavar=("NAME", "ACC_PATH", "RES_PATH", "GENOME",
+                                 "READ_LEN", "VARIATION"),
+                        help="Dataset name, accuracy table path, resource table "
+                             "path, genome, read length, variation (repeatable, "
+                             "used with --summary-pdf).")
     args = parser.parse_args()
 
     if args.combined_pdf:
@@ -290,6 +462,15 @@ def main():
             parser.error("--combined-pdf requires at least one --dataset entry")
         args.combined_pdf.parent.mkdir(parents=True, exist_ok=True)
         plot_combined_k_pdf(args.dataset, args.combined_pdf, args.score_threshold)
+        return
+
+    if args.summary_pdf:
+        if not args.summary_dataset:
+            parser.error("--summary-pdf requires at least one --summary-dataset entry")
+        args.summary_pdf.parent.mkdir(parents=True, exist_ok=True)
+        plot_summary_pdf(args.summary_dataset, args.summary_pdf,
+                         args.main_k, args.score_threshold,
+                         png_dir=args.summary_png_dir)
         return
 
     if args.input is None or args.output_dir is None:

@@ -6,7 +6,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, accuracy_tables, resource_tables, k_plots, combined_k_plots
+    plots, resources, accuracy_tables, resource_tables, k_plots, combined_k_plots, summary_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -113,13 +113,22 @@ SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
 K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS] + RESOURCE_K_METRICS
 
+# Summary plots (all datasets, one plot per metric): absolute accuracy metrics,
+# their delta-vs-default counterparts, and the two resource metrics.
+SUMMARY_PNG_METRICS = (
+    PLOT_METRICS
+    + [m + "_delta" for m in PLOT_METRICS]
+    + RESOURCE_K_METRICS
+)
+
 rule final:
     input:
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else [],
-        "result/combined_k_plots.pdf" if HAS_MULTI_K else []
+        "result/combined_k_plots.pdf" if HAS_MULTI_K else [],
+        "result/summary_plots.pdf"
 
 
 rule run_adna_accuracy:
@@ -275,6 +284,34 @@ rule combined_k_plots:
         )
     shell:
         "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args}"
+
+
+def _summary_dataset_arg(dataset_id, acc, res):
+    """Build a --summary-dataset argument: name, table paths, and the components
+    used to derive the shortened dataset label (genome, read length, variation)."""
+    cfg = DATASET_CONFIGS[dataset_id]
+    return (
+        f"--summary-dataset {dataset_id} {acc} {res} "
+        f"{cfg['endogenous_genome']} {cfg['read_length']} {cfg['endogenous_variation']}"
+    )
+
+
+rule summary_plots:
+    output:
+        pdf="result/summary_plots.pdf",
+        pngs=expand("result/summary_plots/{metric}.png", metric=SUMMARY_PNG_METRICS)
+    input:
+        accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS)
+    params:
+        threshold=config.get("main_score_threshold", 60),
+        main_k=config.get("main_k", 17),
+        dataset_args=lambda wildcards, input: " ".join(
+            _summary_dataset_arg(d, acc, res)
+            for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
+        )
+    shell:
+        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} {params.dataset_args}"
 
 
 rule resources:
