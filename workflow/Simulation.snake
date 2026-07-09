@@ -10,11 +10,13 @@ SCRIPTS = "workflow/scripts"
 
 VARIATION_SETTINGS = {
     "var1": "",
-    "var2": "--snp-rate 0.0005 --small-indel-rate 0.00005 --max-small-indel-size 30",
-    "var3": "--snp-rate 0.001 --small-indel-rate 0.0001 --max-small-indel-size 50",
-    "var4": "--snp-rate 0.005 --small-indel-rate 0.0005 --max-small-indel-size 50",
-    "var5": "--snp-rate 0.005 --small-indel-rate 0.001 --max-small-indel-size 100",
-    "var6": "--snp-rate 0.02 --small-indel-rate 0.002 --max-small-indel-size 100",
+    "var0p05": "--snp-rate 0.0005 --small-indel-rate 0.00005 --max-small-indel-size 30",
+    "var0p1": "--snp-rate 0.001 --small-indel-rate 0.0001 --max-small-indel-size 100",
+    # "var0p5": "--snp-rate 0.005 --small-indel-rate 0.0005 --max-small-indel-size 50",
+    "var0p5": "--snp-rate 0.005 --small-indel-rate 0.001 --max-small-indel-size 100",
+    "var2": "--snp-rate 0.02 --small-indel-rate 0.002 --max-small-indel-size 100",
+    "var5": "--snp-rate 0.05 --small-indel-rate 0.005 --max-small-indel-size 100",
+    "var10": "--snp-rate 0.1 --small-indel-rate 0.01 --max-small-indel-size 100",
 }
 
 

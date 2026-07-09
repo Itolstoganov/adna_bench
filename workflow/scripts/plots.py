@@ -331,31 +331,38 @@ def _summary_label(col):
     return SUMMARY_METRIC_LABELS.get(col, col)
 
 
-def _apply_delta(df, y, baseline):
-    """Subtract `baseline`'s per-dataset value of `y` from every row.
+def _apply_baseline(df, y, baseline, op):
+    """Rebase `y` against `baseline`'s per-dataset value using `op`.
 
-    Returns a copy with `y` replaced by the difference to the baseline tool. Rows
-    of datasets where the baseline is absent get NaN and are dropped downstream.
+    `op` is "sub" (difference) or "div" (ratio). Datasets where the baseline is
+    absent get NaN and are dropped downstream.
     """
     base = (df[df["Display"] == baseline][["dataset", y]]
             .rename(columns={y: "__base"}))
     merged = df.merge(base, on="dataset", how="left").copy()
-    merged[y] = merged[y] - merged["__base"]
+    if op == "div":
+        merged[y] = merged[y] / merged["__base"]
+    else:
+        merged[y] = merged[y] - merged["__base"]
     return merged.drop(columns="__base")
 
 
 def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
-                        title=None, delta_baseline=None):
+                        title=None, delta_baseline=None, ratio_baseline=None,
+                        log_y=False):
     """Point/line plot of metric `y` with datasets on the x axis, one line per tool.
 
     When `delta_baseline` is set, values are plotted as the difference to that
-    tool (a dashed line marks zero). The figure is written to `pdf` and/or
-    `png_path` (both may be given to emit the same plot to each).
+    tool (a dashed line marks zero); when `ratio_baseline` is set, as the ratio to
+    that tool (a dashed line marks one). `log_y` puts the y axis on a log scale.
+    The figure is written to `pdf` and/or `png_path` (both may be given).
     """
     if y not in df.columns:
         return
     if delta_baseline is not None:
-        df = _apply_delta(df, y, delta_baseline)
+        df = _apply_baseline(df, y, delta_baseline, "sub")
+    elif ratio_baseline is not None:
+        df = _apply_baseline(df, y, ratio_baseline, "div")
     sub = df[df[y].notna()]
     if sub.empty:
         return
@@ -364,12 +371,22 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
     plt.figure(figsize=(max(10, len(dataset_order) * 1.2), 6))
     if delta_baseline is not None:
         plt.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+    elif ratio_baseline is not None:
+        plt.axhline(1, color="gray", linewidth=0.8, linestyle="--")
     sns.pointplot(data=sub, x="dataset", y=y, hue="Display",
                   order=dataset_order, hue_order=names, palette=palette,
                   errorbar=None)
     label = _summary_label(y)
+    if delta_baseline is not None:
+        ylabel = f"Δ {label} (vs {delta_baseline})"
+    elif ratio_baseline is not None:
+        ylabel = f"{label} (ratio to {ratio_baseline})"
+    else:
+        ylabel = label
+    if log_y:
+        plt.yscale("log")
     plt.xlabel("Dataset")
-    plt.ylabel(f"Δ {label} (vs {delta_baseline})" if delta_baseline is not None else label)
+    plt.ylabel(ylabel)
     plt.title(title if title is not None else y)
     plt.xticks(rotation=45, ha="right")
     plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
@@ -381,12 +398,17 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
     plt.close()
 
 
-def plot_summary_pdf(summary_inputs, output_path, k, score_threshold, png_dir=None):
+def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
+                     png_dir=None, num_reads=None):
     # summary_inputs: list of (NAME, ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION)
     short_names = _build_short_names(
         [(genome, read_len, var) for _n, _a, _r, genome, read_len, var in summary_inputs]
     )
     dataset_order = list(dict.fromkeys(short_names))
+    read_len_by_dataset = {
+        short: float(read_len)
+        for (_n, _a, _r, _g, read_len, _v), short in zip(summary_inputs, short_names)
+    }
     acc_df = _build_summary_frame(
         [(acc, short) for (_n, acc, _r, *_), short in zip(summary_inputs, short_names)],
         k=k, score_threshold=score_threshold,
@@ -420,9 +442,29 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold, png_dir=No
                     title=f"{_summary_label(metric_col)} (Δ vs {SUMMARY_DELTA_BASELINE})",
                     delta_baseline=SUMMARY_DELTA_BASELINE)
         if res_df is not None and not res_df.empty:
-            for y_col, slug, title in RESOURCE_METRICS:
-                plot_summary_metric(res_df, y_col, dataset_order, pdf=pdf,
-                                    png_path=png_path(slug), title=title)
+            # runtime normalised per processed base: total reads (config) x read
+            # length (per dataset). Falls back to total time if num_reads is unset.
+            runtime_col = "Mapping Time (s)"
+            runtime_title = "Mapping Time"
+            if num_reads:
+                res_df = res_df.copy()
+                read_len = res_df["dataset"].map(read_len_by_dataset)
+                res_df["Runtime per base (s)"] = (
+                    res_df["Mapping Time (s)"] / (num_reads * read_len)
+                )
+                runtime_col = "Runtime per base (s)"
+                runtime_title = "Runtime per base"
+            plot_summary_metric(res_df, runtime_col, dataset_order, pdf=pdf,
+                                png_path=png_path("k_runtime"), title=runtime_title)
+            # absolute peak memory
+            plot_summary_metric(res_df, "Peak Memory (GB)", dataset_order, pdf=pdf,
+                                png_path=png_path("k_memory"), title="Peak Memory")
+            # peak memory relative to the default aligner (log scale)
+            plot_summary_metric(
+                res_df, "Peak Memory (GB)", dataset_order, pdf=pdf,
+                png_path=png_path("k_memory_delta"),
+                title=f"Peak Memory (relative to {SUMMARY_DELTA_BASELINE})",
+                ratio_baseline=SUMMARY_DELTA_BASELINE, log_y=True)
 
 
 def main():
@@ -449,6 +491,9 @@ def main():
                              "directory (used with --summary-pdf).")
     parser.add_argument("--main-k", type=int,
                         help="k value selected for the summary plots.")
+    parser.add_argument("--num-reads", type=int,
+                        help="Total reads per dataset (config); enables runtime-"
+                             "per-base in the summary plots.")
     parser.add_argument("--summary-dataset", nargs=6, action="append", default=[],
                         metavar=("NAME", "ACC_PATH", "RES_PATH", "GENOME",
                                  "READ_LEN", "VARIATION"),
@@ -470,7 +515,7 @@ def main():
         args.summary_pdf.parent.mkdir(parents=True, exist_ok=True)
         plot_summary_pdf(args.summary_dataset, args.summary_pdf,
                          args.main_k, args.score_threshold,
-                         png_dir=args.summary_png_dir)
+                         png_dir=args.summary_png_dir, num_reads=args.num_reads)
         return
 
     if args.input is None or args.output_dir is None:

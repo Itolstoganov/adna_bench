@@ -119,6 +119,7 @@ SUMMARY_PNG_METRICS = (
     PLOT_METRICS
     + [m + "_delta" for m in PLOT_METRICS]
     + RESOURCE_K_METRICS
+    + ["k_memory_delta"]
 )
 
 rule final:
@@ -306,12 +307,13 @@ rule summary_plots:
     params:
         threshold=config.get("main_score_threshold", 60),
         main_k=config.get("main_k", 17),
+        num_reads=config.get("num_reads"),
         dataset_args=lambda wildcards, input: " ".join(
             _summary_dataset_arg(d, acc, res)
             for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
         )
     shell:
-        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} {params.dataset_args}"
+        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.dataset_args}"
 
 
 rule resources:
