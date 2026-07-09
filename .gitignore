@@ -8,6 +8,8 @@ result
 runs
 csv
 genomes
+meta_bench/genomes
+meta_bench/results
 .*
 workflow/.snakemake/*
 *__pycache__*

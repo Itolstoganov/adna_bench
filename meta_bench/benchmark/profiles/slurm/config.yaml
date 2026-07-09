@@ -1,0 +1,56 @@
+# Snakemake 7 SLURM profile — GENERIC cluster submission (not native --slurm).
+# Used via:  PROFILE=slurm ./run.sh
+#
+# Why generic `cluster:` instead of `slurm: true`:
+# Snakemake 7.32's native --slurm launches every job through an inner `srun`. On modern
+# SLURM (23.11+) that srun aborts whenever the allocation's env vars are inconsistent:
+#   - total mem_mb        -> SLURM bumps CPUs to honour --mem -> fatal
+#                            "SLURM_CPUS_PER_TASK != SLURM_TRES_PER_TASK"
+#   - mem_mb_per_cpu      -> Snakemake 7 ALSO injects a default mem_mb, so both --mem and
+#                            --mem-per-cpu are sent -> fatal "SLURM_MEM_PER_CPU,
+#                            SLURM_MEM_PER_GPU, SLURM_MEM_PER_NODE are mutually exclusive".
+# Generic submission sbatch's the jobscript directly (no inner srun), so none of those
+# checks ever fire. We pass total --mem and --cpus-per-task={threads} ourselves.
+#
+# EDIT the two placeholders (account / partition) below.
+
+cluster:
+  mkdir -p logs/slurm/{rule} &&
+  sbatch
+    --account=YOUR_ACCOUNT
+    --partition=YOUR_PARTITION
+    --cpus-per-task={threads}
+    --mem={resources.mem_mb}
+    --time={resources.runtime}
+    --job-name=smk-{rule}
+    --output=logs/slurm/{rule}/%j-{rule}.out
+    --error=logs/slurm/{rule}/%j-{rule}.err
+    --parsable
+cluster-cancel: scancel
+jobs: 100                       # max jobs submitted to the queue at once
+use-conda: true
+conda-frontend: conda
+printshellcmds: true
+rerun-incomplete: true
+
+# Total memory (mem_mb) and walltime (runtime, minutes) per rule. On a per-core-billed
+# partition SLURM may allocate more CPUs than {threads} to honour --mem — harmless here
+# (no srun to complain), the tool still uses only {threads}. If you want those extra cores
+# put to work, raise the rule's threads with a `set-threads:` block.
+default-resources:
+  mem_mb: 4000
+  runtime: 240
+
+set-resources:
+  KrakenUniq:                   # --preload loads the whole DB index into RAM
+    mem_mb: 131072              # 128G — raise toward the index size if it OOMs
+    runtime: 360
+  Build_Malt_DB:
+    mem_mb: 262144              # 256G — keep in step with MALT_MEM in setup_envs.sh
+    runtime: 720
+  Malt:
+    mem_mb: 262144
+    runtime: 720
+  Bowtie2_Index:
+    mem_mb: 65536
+    runtime: 360

@@ -1,0 +1,22 @@
+# Metagenomic benchmark config.
+#
+# The benchmark runs a taxonomic profiler on the simulated samples and scores its
+# output against the per-read ground truth from the simulation. The profiler is
+# swappable; only aMeta-malt is implemented today.
+
+# Which profiler backend to run. Implemented: aMeta-malt.
+# Reserved (not implemented): aMeta-ngslca (aligner + ngsLCA).
+profiler: aMeta-malt
+
+# aMeta (submodule) checkout and the config passed to its Snakefile.
+ameta_dir: meta_bench/aMeta
+ameta_config: meta_bench/benchmark/aMeta_config.yaml
+
+# Simulation outputs to benchmark against (see meta_bench/config/config.yaml).
+sim_results: meta_bench/results/sim
+samples: [sample1, sample2, sample3, sample4, sample5, sample6, sample7, sample8, sample9, sample10]
+
+# Scoring
+results_dir: meta_bench/results/benchmark
+detect_threshold: 1     # min profiler reads/count to call a taxon present
+min_truth_reads: 1      # min simulated bacterial reads to count a taxon as truly present

@@ -1,0 +1,135 @@
+# Metagenomic aDNA simulation (Snakemake 9; run from the repo root).
+#
+# Per sample: two gargammel passes concatenated into one single-end FASTQ —
+#   ancient (damaged; bact = ancient-microbe list, endo+cont = human)
+#   modern  (undamaged; bact = modern-microbe list, endo+cont = human)
+# Ground truth is per-read (taxon + coordinates + deaminated positions), parsed
+# from each pass and merged. The heavy gargammel_simulate rule is shared with
+# sim_bench via shared/rules/gargammel.smk (registry-driven).
+#
+#   snakemake -s meta_bench/workflow/Simulation.snake --cores 8 --use-conda
+
+import re
+
+configfile: "meta_bench/config/config.yaml"
+
+GENOMES = config["genomes_dir"]
+RESULTS = config["results_dir"]
+NUM_READS = config["num_reads"]
+RL = config["read_length"]
+SHARED_SCRIPTS = "shared/scripts"
+
+SAMPLES = [f"sample{i}" for i in range(1, config["n_samples"] + 1)]
+
+
+def load_accessions(path):
+    species = {}
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if fields[0] == "species":
+                continue
+            fields += [""] * (4 - len(fields))
+            species[fields[0]] = {
+                "class": fields[1], "taxid": fields[2], "accession": fields[3],
+            }
+    return species
+
+
+SPECIES = load_accessions(config["accessions"])
+ANCIENT_SPECIES = [s for s, v in SPECIES.items() if v["class"] == "ancient"]
+MODERN_SPECIES = [s for s, v in SPECIES.items() if v["class"] == "modern"]
+MICROBIAL_SPECIES = ANCIENT_SPECIES + MODERN_SPECIES
+HUMAN = config["human_genome"]
+HUMAN_FA = f"{GENOMES}/{HUMAN}.fa"
+
+PASS_GENOMES = {
+    "ancient": [f"{GENOMES}/{s}.fa" for s in ANCIENT_SPECIES],
+    "modern": [f"{GENOMES}/{s}.fa" for s in MODERN_SPECIES],
+}
+
+
+# Register both passes of every sample with the shared gargammel_simulate rule.
+GARGAMMEL_REGISTRY = {}
+for _i, _sample in enumerate(SAMPLES, start=1):
+    _comp = ",".join(map(str, config["proportions"][_i - 1]))
+    for _phase in ("ancient", "modern"):
+        _simdir = f"{RESULTS}/{_sample}/{_phase}"
+        if _phase == "ancient":
+            _gargs = f"-rl {RL} {config['ancient_frag_args']} -damage {config['damage']}"
+        else:
+            _gargs = f"-rl {RL} -f {config['modern_sizefreq']}"
+        GARGAMMEL_REGISTRY[_simdir] = {
+            "endo": [HUMAN_FA],
+            "cont": [HUMAN_FA],
+            "bact_list": f"{_simdir}/bact.list",
+            "bact_genome_dir": GENOMES,
+            "num": NUM_READS,
+            "comp": _comp,
+            "gargammel_args": _gargs,
+            "extra_inputs": PASS_GENOMES[_phase],
+        }
+
+
+include: "rules/composition.smk"
+include: "../../shared/rules/gargammel.smk"
+
+
+rule all:
+    input:
+        expand(RESULTS + "/{sample}/reads.fastq.gz", sample=SAMPLES),
+        expand(RESULTS + "/{sample}/truth.tsv", sample=SAMPLES),
+
+
+rule parse_pass_truth:
+    """Per-read truth (taxon + coords + damage) for one gargammel pass."""
+    input:
+        r1=RESULTS + "/{sample}/{phase}/simulated_s1.fq.gz",
+        c2t=GENOMES + "/contig2taxon.tsv",
+    output:
+        gt=RESULTS + "/{sample}/{phase}/ground_truth.bed",
+        damage=RESULTS + "/{sample}/{phase}/damage.bed",
+        truth=RESULTS + "/{sample}/{phase}/truth.tsv",
+    wildcard_constraints:
+        phase="(ancient|modern)",
+        sample=r"sample\d+",
+    shell:
+        r"""
+        python {SHARED_SCRIPTS}/parse_gargammel.py -1 {input.r1} \
+            -o {output.gt} -D {output.damage} -t {output.truth} \
+            --damage-classes all --contig2taxon {input.c2t} \
+            --pass-label {wildcards.phase}
+        """
+
+
+rule concat_sample:
+    """Concatenate the two passes' single-end reads into the sample FASTQ."""
+    input:
+        ancient=RESULTS + "/{sample}/ancient/simulated_s1.fq.gz",
+        modern=RESULTS + "/{sample}/modern/simulated_s1.fq.gz",
+    output:
+        reads=RESULTS + "/{sample}/reads.fastq.gz",
+    wildcard_constraints:
+        sample=r"sample\d+",
+    shell:
+        "cat {input.ancient} {input.modern} > {output.reads}"
+
+
+rule concat_truth:
+    """Merge the two passes' per-read truth tables (single header)."""
+    input:
+        ancient=RESULTS + "/{sample}/ancient/truth.tsv",
+        modern=RESULTS + "/{sample}/modern/truth.tsv",
+    output:
+        truth=RESULTS + "/{sample}/truth.tsv",
+    wildcard_constraints:
+        sample=r"sample\d+",
+    shell:
+        r"""
+        head -n 1 {input.ancient} > {output.truth}
+        tail -n +2 {input.ancient} >> {output.truth}
+        tail -n +2 {input.modern} >> {output.truth}
+        """

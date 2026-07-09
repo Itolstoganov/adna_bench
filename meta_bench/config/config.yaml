@@ -1,0 +1,41 @@
+# Metagenomic aDNA simulation config (Snakemake 9; run from the repo root).
+# Reproduces the composition scheme of meta_bench/sim_dataset: per sample, two
+# gargammel passes — an ancient (damaged) pass and a modern (undamaged) pass —
+# concatenated into one single-end FASTQ. See
+# meta_bench/scripts/aMeta/gargammel_sim.sh and the gargammel-ancient-modern
+# scheme note.
+
+n_samples: 10
+num_reads: 250000          # gargammel -n, per pass (ancient + modern -> ~2x per sample)
+read_length: 125           # gargammel -rl
+seed: 123                  # composition seed (matches generate_bact_lists.R set.seed(123))
+
+# Damage / fragment-size models
+damage: "0.03,0.4,0.01,0.3"                         # Briggs params, ancient pass only
+ancient_frag_args: "--loc 3.7424069808 --scale 0.2795148843"   # lognormal fragment sizes
+modern_sizefreq: "gargammel/src/sizefreq.size.gz"   # empirical size freq, modern pass
+
+# Per-sample composition: [bacterial, contaminant, endogenous], from the
+# bactFrac/contFrac/endoFrac vectors in gargammel_sim.sh (sample1 .. sample10).
+proportions:
+  - [0.7, 0.20, 0.10]
+  - [0.7, 0.15, 0.15]
+  - [0.7, 0.10, 0.20]
+  - [0.5, 0.20, 0.30]
+  - [0.5, 0.15, 0.35]
+  - [0.5, 0.10, 0.40]
+  - [0.4, 0.10, 0.50]
+  - [0.3, 0.15, 0.55]
+  - [0.3, 0.10, 0.60]
+  - [0.3, 0.05, 0.65]
+
+# Inputs
+accessions: meta_bench/config/accessions.tsv
+ancient_table: meta_bench/config/ground_truth_ancient_microbes.txt
+modern_table: meta_bench/config/ground_truth_modern_microbes.txt
+human_genome: Homo_sapiens        # species name (accessions.tsv) used for endo + cont
+
+# Paths / tooling
+gargammel_pl: gargammel/gargammel.pl
+genomes_dir: meta_bench/genomes
+results_dir: meta_bench/results/sim

@@ -44,8 +44,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Reuse the existing gargammel/ground-truth helpers living next to this script.
+# Reuse the existing gargammel/ground-truth helpers. parse_gargammel now lives
+# in the shared module; adna_accuracy stays next to this script.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared" / "scripts"))
 from parse_gargammel import normalize_read_name, parse_fastq_header  # noqa: E402
 from adna_accuracy import overlap, parse_gargammel_name  # noqa: E402
 

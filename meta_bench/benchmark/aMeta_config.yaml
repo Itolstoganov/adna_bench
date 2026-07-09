@@ -1,0 +1,42 @@
+# aMeta config for the metagenomic benchmark (profiler: aMeta-malt).
+#
+# Bowtie2 (pathogen screen) and mapDamage are DISABLED — the benchmark scores the
+# MALT taxonomic profile, not the pathogen screen, so we skip that compute via the
+# analyses.bowtie2 toggle (see the aMeta fork's bowtie2-skip option). Keeping
+# mapdamage off is required when bowtie2 is off.
+#
+# run.sh generates config/samples.tsv (pointing at the simulated reads) into the
+# run directory before launching aMeta, so leave `samplesheet` as-is.
+#
+# EDIT the DATABASE paths below on the server (identical to
+# meta_bench/runs/sim_dataset/config/config.yaml). bowtie2_db / pathogenomesFound
+# are still schema-checked even though the bowtie2 step is skipped, so they must
+# point at real files (or harmless placeholders that exist).
+
+samplesheet: config/samples.tsv
+samples:
+  exclude: []
+
+analyses:
+  bowtie2: false
+  mapdamage: false
+  authentication: true
+  malt: true
+
+adapters:
+  illumina: true
+  nextera: false
+  custom: []
+
+# ---- DATABASES: set these on the server (see runs/sim_dataset/config.yaml) ----
+krakenuniq_db: /PATH/TO/KrakenUniq_RefSeq_DB
+bowtie2_db: /PATH/TO/library.pathogen.fna
+bowtie2_seqid2taxid_db: /PATH/TO/seqid2taxid.pathogen.map
+pathogenomesFound: /PATH/TO/pathogensfound.tab
+malt_nt_fasta: resources/malt/library.fna
+malt_seqid2taxid_db: resources/malt/seqid2taxid.map
+malt_accession2taxid: resources/malt/nucl.accession2taxid
+ncbi_db: resources/ncbi
+
+n_unique_kmers: 1000
+n_tax_reads: 200

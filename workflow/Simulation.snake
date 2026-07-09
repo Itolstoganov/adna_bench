@@ -7,6 +7,7 @@ include: "rules/pipeline.smk"
 NUM_READS = config.get("num_reads", 100000)
 
 SCRIPTS = "workflow/scripts"
+SHARED_SCRIPTS = "shared/scripts"
 
 VARIATION_SETTINGS = {
     "var1": "",
@@ -18,6 +19,23 @@ VARIATION_SETTINGS = {
     "var5": "--snp-rate 0.05 --small-indel-rate 0.005 --max-small-indel-size 100",
     "var10": "--snp-rate 0.1 --small-indel-rate 0.01 --max-small-indel-size 100",
 }
+
+
+# Register each dataset with the shared gargammel_simulate rule. Keyed by the
+# per-dataset output prefix "simdir" = datasets/{dataset_id}.
+GARGAMMEL_REGISTRY = {}
+for _did, _p in DATASET_CONFIGS.items():
+    GARGAMMEL_REGISTRY[f"datasets/{_did}"] = {
+        "endo": [f"genomes/{_p['endogenous_genome']}.fa"],
+        "cont": [f"genomes/{_p['contaminant_genome']}.fa"],
+        "bact_dir": f"gargammel_data/{_p['bacterial_db']}/fasta",
+        "num": NUM_READS,
+        "comp": ",".join(map(str, _p["proportions"])),
+        "gargammel_args": f"-l {_p['read_length']} -damage 0.03,0.4,0.01,0.3",
+    }
+
+
+include: "../shared/rules/gargammel.smk"
 
 
 rule all:
@@ -73,34 +91,6 @@ rule mason_variator:
         """
 
 
-rule gargammel_simulate:
-    input:
-        endo_genome=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_genome')}.fa",
-        cont_genome=lambda wc: f"genomes/{get_dataset_param(wc, 'contaminant_genome')}.fa",
-        bact_db=lambda wc: f"gargammel_data/{get_dataset_param(wc, 'bacterial_db')}"
-    output:
-        s1="datasets/{dataset_id}/simulated_s1.fq.gz",
-        s2="datasets/{dataset_id}/simulated_s2.fq.gz"
-    params:
-        num_reads=NUM_READS,
-        workdir=lambda wc: f"datasets/{wc.dataset_id}",
-        outprefix=lambda wc: f"datasets/{wc.dataset_id}/simulated",
-        read_length=lambda wc: get_dataset_param(wc, "read_length"),
-        proportions=lambda wc: ",".join(map(str, get_dataset_param(wc, "proportions")))
-    shell:
-        """
-        # TODO: Diploid support
-        mkdir -p {params.workdir}/endo
-        ln -sfr {input.endo_genome} {params.workdir}/endo/endo.1.fa
-        mkdir -p {params.workdir}/cont
-        ln -sfr {input.cont_genome} {params.workdir}/cont/cont.1.fa
-        ln -sfr {input.bact_db}/fasta {params.workdir}/bact
-        perl gargammel/gargammel.pl -n {params.num_reads} --comp {params.proportions} \
-        -l {params.read_length} -damage 0.03,0.4,0.01,0.3 \
-        -o {params.outprefix} {params.workdir}
-        """
-
-
 rule fastp_process:
     input:
         s1="datasets/{dataset_id}/simulated_s1.fq.gz",
@@ -131,7 +121,7 @@ rule parse_ground_truth:
         input_dir=lambda wc: f"datasets/{wc.dataset_id}"
     shell:
         """
-        {SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} \
+        python {SHARED_SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} \
         -o {output.gt} -D {output.damage}
         """
 

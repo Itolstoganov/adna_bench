@@ -1,0 +1,52 @@
+# Reference genomes for the metagenomic simulation.
+# Columns: species  class  taxid  accession
+#   species    = FASTA basename used in the composition tables (…_microbes.txt)
+#   class      = ancient | modern | host
+#   taxid      = NCBI taxonomy id ("" = let the resolver fill it)
+#   accession  = pinned RefSeq/GenBank assembly ("" = resolve the reference/
+#                representative complete genome by species name at download time)
+#
+# This table is the reproducibility anchor. Rows with an empty accession are
+# resolved by name on first download; run scripts/resolve_accessions.py to
+# snapshot the exact accessions back into this file and commit it.
+#
+# Yersinia pestis is pinned to strain CO92 (the marquee ancient pathogen, the
+# only strain the original aMeta scripts fixed). Homo sapiens is the host used
+# for both the endogenous (ancient) and contaminant (modern) gargammel inputs.
+species	class	taxid	accession
+Streptosporangium_roseum	ancient	479432	GCF_000024865.1
+Clostridium_botulinum	ancient	413999	GCF_000063585.1
+Salmonella_enterica	ancient	99287	GCF_000006945.2
+Parvimonas_micra	ancient	33033	GCF_900637905.1
+Sorangium_cellulosum	ancient	448385	GCF_000067165.1
+Nocardia_brasiliensis	ancient	37326	GCF_002209125.2
+Bradyrhizobium_erythrophlei	ancient	1437360	GCF_042430365.1
+Mycolicibacterium_aurum	ancient	1791	GCF_900637195.1
+Yersinia_pestis_CO92	ancient	632	GCF_000009065.1
+Neisseria_meningitidis	ancient	487	GCF_022869645.1
+Enterococcus_faecalis	ancient	1169293	GCF_000393015.1
+Rothia_dentocariosa	ancient	762948	GCF_000164695.2
+Mycobacterium_avium	ancient	439334	GCF_022175585.2
+Ralstonia_solanacearum	ancient	305	GCF_001587155.1
+Streptococcus_pyogenes	ancient	1314	GCF_900475035.1
+Campylobacter_rectus	ancient	203	GCF_004803795.1
+Fusarium_fujikuroi	ancient	1279085	GCF_900079805.1
+Prosthecobacter_vanneervenii	ancient	48466	GCF_014203095.1
+Mycobacterium_riyadhense	modern	486698	GCF_963853645.1
+Lactococcus_lactis	modern	1360	GCF_003176835.1
+Brevibacterium_aurantiacum	modern	273384	GCF_003932995.1
+Pseudomonas_caeni	modern	521719	GCF_000421765.1
+Planobispora_rosea	modern	35762	GCF_014648175.1
+Micromonospora_echinospora	modern	1877	GCF_014203425.1
+Nonomuraea_gerenzanensis	modern	93944	GCF_020215645.1
+Pseudomonas_thivervalensis	modern	86265	GCF_001269655.1
+Acanthamoeba_castellanii	modern	1257118	GCF_000313135.1
+Rhodopseudomonas_palustris	modern	1076	GCF_016584445.1
+Micromonas_commoda	modern	296587	GCF_000090985.2
+Burkholderia_mallei	modern	13373	GCF_033956065.1
+Pseudomonas_psychrophila	modern	122355	GCF_011040435.1
+Methylobacterium_bullatum	modern	570505	GCF_044501185.1
+Rhodococcus_hoagii	modern	43767	GCF_003013675.1
+Vermamoeba_vermiformis	modern	5778	GCA_020696425.1
+Aspergillus_flavus	modern	5059	GCF_009017415.1
+Homo_sapiens	host	9606	GCF_000001405.40

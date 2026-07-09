@@ -1,3 +1,7 @@
 [submodule "gargammel"]
 	path = gargammel
 	url = https://github.com/Itolstoganov/gargammel
+[submodule "meta_bench/aMeta"]
+	path = meta_bench/aMeta
+	url = git@github.com:Itolstoganov/aMeta.git
+	branch = strobealign-benchmark
