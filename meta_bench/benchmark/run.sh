@@ -43,17 +43,20 @@ mkdir -p "$RUNDIR/config"
 } > "$RUNDIR/config/samples.tsv"
 
 case "$PROFILER" in
-  aMeta-malt)
+  aMeta-malt|aMeta-ngslca)
     cp "$AMETA_CONFIG" "$RUNDIR/config/config.yaml"
     profile_args=()
     [[ -n "$PROFILE" ]] && profile_args=(--profile "$(readlink -f "$PROFILE")")
+    # aMeta-malt uses the config default (taxonomic_profiler: malt); aMeta-ngslca
+    # overrides it to the aligner + ngsLCA backend (the nested `aligner:` block
+    # lives in aMeta_config.yaml).
+    config_args=()
+    [[ "$PROFILER" == "aMeta-ngslca" ]] && config_args=(--config taxonomic_profiler=aligner_ngslca)
     ( cd "$RUNDIR" && snakemake -s "$(readlink -f "$AMETA_DIR")/workflow/Snakefile" \
-        --configfile config/config.yaml --use-conda --conda-frontend conda \
+        --configfile config/config.yaml "${config_args[@]}" \
+        --use-conda --conda-frontend conda \
         "${profile_args[@]}" -j "$CORES" "$@" )
     ;;
-  aMeta-ngslca)
-    echo "profiler 'aMeta-ngslca' is not implemented yet (aligner + ngsLCA)." >&2
-    exit 1 ;;
   *)
     echo "unknown profiler: '$PROFILER' (config: $CONFIG)" >&2; exit 1 ;;
 esac

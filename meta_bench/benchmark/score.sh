@@ -31,7 +31,9 @@ case "$PROFILER" in
       --matrix "$RUNDIR/results/MALT_ABUNDANCE_MATRIX_SAM/malt_abundance_matrix_sam.txt" \
       --out "$DETECTIONS" ;;
   aMeta-ngslca)
-    python "$BENCH_SCRIPTS/adapter_ngslca.py" ;;
+    python "$BENCH_SCRIPTS/adapter_ngslca.py" \
+      --matrix "$RUNDIR/results/NGSLCA_ABUNDANCE_MATRIX/ngslca_abundance_matrix.txt" \
+      --out "$DETECTIONS" ;;
   *)
     echo "unknown profiler: '$PROFILER'" >&2; exit 1 ;;
 esac

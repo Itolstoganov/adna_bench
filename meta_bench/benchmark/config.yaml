@@ -4,8 +4,9 @@
 # output against the per-read ground truth from the simulation. The profiler is
 # swappable; only aMeta-malt is implemented today.
 
-# Which profiler backend to run. Implemented: aMeta-malt.
-# Reserved (not implemented): aMeta-ngslca (aligner + ngsLCA).
+# Which profiler backend to run. Implemented: aMeta-malt, aMeta-ngslca.
+#   aMeta-malt    MALT alignment + LCA taxonomy (classic aMeta).
+#   aMeta-ngslca  strobealign (aDNA, built from source) + ngsLCA taxonomy.
 profiler: aMeta-malt
 
 # aMeta (submodule) checkout and the config passed to its Snakefile.

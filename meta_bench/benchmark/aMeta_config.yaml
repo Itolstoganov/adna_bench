@@ -40,3 +40,16 @@ ncbi_db: resources/ncbi
 
 n_unique_kmers: 1000
 n_tax_reads: 200
+
+# Backend. Left at the default (malt) here; run.sh overrides it to
+# aligner_ngslca for the aMeta-ngslca profiler. The aligner block below is only
+# used in that case. ngsLCA reuses names.dmp/nodes.dmp derived from krakenuniq_db's
+# taxDB and malt_accession2taxid for -acc2tax.
+taxonomic_profiler: malt
+aligner:
+  name: strobealign
+  repo: "https://github.com/ksahlin/strobealign"
+  ref: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
+  args: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
+  max_secondary: 20
+ngslca_args: "-simscorelow 0.85 -simscorehigh 1.0"
