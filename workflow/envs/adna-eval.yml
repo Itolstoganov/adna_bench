@@ -16,6 +16,7 @@ dependencies:
   - cmake=3.27
   - cxx-compiler
   - seaborn
+  - pandas
   - minimap2
   - isa-l
   - pyyaml

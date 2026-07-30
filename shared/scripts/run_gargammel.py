@@ -95,8 +95,10 @@ def main() -> None:
     else:
         sys.exit("Error: provide either --bact-dir or --bact-list")
 
+    # print(args.comp, sum([float(x) for x in args.comp]))
+    comp = ','.join([str(float(x)) for x in args.comp.split(",")])
     cmd = (
-        ["perl", args.gargammel, "-n", str(args.num), "--comp", args.comp]
+        ["perl", args.gargammel, "-n", str(args.num), "--comp", comp]
         + shlex.split(args.gargammel_args)
         + ["-o", args.out, str(workdir)]
     )
