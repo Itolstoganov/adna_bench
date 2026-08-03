@@ -17,7 +17,12 @@ produces, for every profiler:
      (found with score > 0 vs in-sample truth), `mean_reads_per_node`, and
      `evenness_tp`/`evenness_fp` (breadth of coverage over true/false positives).
   3. `auth_calls.tsv`: one row per (profiler, sample, taxon) with read support,
-     score and a TP/FP/FN verdict -- the per-cell backing for both of the above.
+     score, breadth of coverage and a TP/FP/FN verdict -- the per-cell backing
+     for both of the above. It doubles as a cache: breadth is the one column that
+     costs a full pass over a `samtools depth -a` file per node, so on a rerun an
+     existing auth_calls.tsv in --outdir is reused, per profiler, whenever every
+     other column of it still matches what this run computes (see
+     `cache_for_profiler`). Pass --no-cache to always remeasure.
 
 Ground truth is the simulated *reads* (`results/sim/<sample>/truth.tsv`), not the
 composition tables in meta_bench/config/, because gargammel pairs the `bact/list`
@@ -68,7 +73,13 @@ METRIC_COLS = ["profiler", "sample"] + [name for name, _ in METRIC_SPEC]
 
 CALL_COLS = ["profiler", "sample", "taxon", "category", "truth_reads",
              "truth_frac", "score", "aligned_reads", "krakenuniq_surfaced",
-             "verdict"]
+             "verdict", "breadth"]
+
+# A cached row is identified by these, and reusable only if every column that is
+# not `breadth` still agrees -- i.e. the samples, their composition and what the
+# profiler did with them are unchanged.
+CACHE_KEY_COLS = ("profiler", "sample", "taxon")
+COMPOSITION_COLS = [c for c in CALL_COLS if c != "breadth"]
 
 
 # --------------------------------------------------------------------------- #
@@ -315,6 +326,100 @@ def node_breadth(folder):
         return None
 
 
+def fmt_breadth(breadths, sample, key):
+    """Render a breadth cell: blank when the node was never measured, else NA/value."""
+    if (sample, key) not in breadths:
+        return ""
+    value = breadths[(sample, key)]
+    return "NA" if value is None else f"{value:.6f}"
+
+
+def load_call_cache(path):
+    """A previous auth_calls.tsv as profiler -> {(key cols): row}, or {} if unusable."""
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if not reader.fieldnames or "breadth" not in reader.fieldnames:
+            print(f"Breadth cache: ignoring {path} (no breadth column -- written "
+                  f"by an older version of this script)")
+            return {}
+        rows = list(reader)
+    cache = {}
+    for row in rows:
+        key = tuple(row.get(c, "") for c in CACHE_KEY_COLS)
+        cache.setdefault(row.get("profiler", ""), {})[key] = row
+    print(f"Breadth cache: {path} ({len(rows)} row(s), {len(cache)} profiler(s))")
+    return cache
+
+
+def cache_for_profiler(cache, profiler, calls):
+    """Cached breadths for `profiler` as (sample, taxon) -> float|None, or {}.
+
+    Breadth is measured off one `samtools depth` file per authenticated node, so
+    a cached value only carries over when this run is looking at the same nodes
+    of the same samples. Rather than guess which columns could move independently
+    of the depth files, this demands that *every* non-breadth column match: the
+    same (sample, taxon) rows, the same simulated read counts and fractions, the
+    same scores, aligned reads and verdicts. Any disagreement discards the whole
+    profiler's cache -- a partial reuse would be reporting numbers from two
+    different runs in one table.
+    """
+    cached = cache.get(profiler)
+    if not cached:
+        return {}
+
+    complaints, fresh_keys = [], set()
+    for row in calls:
+        key = tuple(str(row[c]) for c in CACHE_KEY_COLS)
+        fresh_keys.add(key)
+        old = cached.get(key)
+        if old is None:
+            complaints.append(f"{key[1]}/{key[2]}: absent from the cached table")
+        elif (render_row(row, COMPOSITION_COLS, {})
+              != [old.get(c, "") for c in COMPOSITION_COLS]):
+            complaints.append(f"{key[1]}/{key[2]}: composition or score changed")
+    complaints += [f"{k[1]}/{k[2]}: cached but no longer present"
+                   for k in sorted(set(cached) - fresh_keys)]
+
+    if complaints:
+        print(f"  [{profiler}] cached calls do not match this run "
+              f"({len(complaints)} row(s)), remeasuring breadth:")
+        for line in complaints[:5]:
+            print(f"      {line}")
+        if len(complaints) > 5:
+            print(f"      ... and {len(complaints) - 5} more")
+        return {}
+
+    out = {}
+    for (_p, sample, taxon), row in cached.items():
+        text = (row.get("breadth") or "").strip()
+        if not text:                       # never measured -- not a cache hit
+            continue
+        try:
+            out[(sample, taxon)] = None if text == "NA" else float(text)
+        except ValueError:
+            continue
+    return out
+
+
+def node_breadths(auth_dir, profiler, needed, scores, label, cached):
+    """(sample, key) -> breadth for the nodes in `needed`, reusing `cached`."""
+    out, reused = {}, 0
+    for sample, key in needed:
+        hit = (sample, label.get(key, key))
+        if hit in cached:
+            out[(sample, key)] = cached[hit]
+            reused += 1
+            continue
+        out[(sample, key)] = node_breadth(
+            os.path.join(auth_dir, profiler, sample, scores[(sample, key)]["taxid"]))
+    if reused:
+        print(f"  [{profiler}] breadth: {reused} node(s) from cache, "
+              f"{len(needed) - reused} measured")
+    return out
+
+
 def load_profiler_scores(auth_dir, profiler, samples, tax):
     """(sample, key) -> {display, score, taxid, reads} for one profiler.
 
@@ -407,7 +512,7 @@ def _mean(vals):
 
 
 def sample_metrics(sample, profiler_scores, truth, detected, perfect,
-                   include_host, host_keys, auth_dir, profiler):
+                   include_host, host_keys, breadths):
     """The METRIC_SPEC metrics for one (profiler, sample), as a name -> value dict."""
     keys = sample_keys(sample, profiler_scores, truth, include_host, host_keys)
     surfaced = detected.get(sample, set())
@@ -433,8 +538,7 @@ def sample_metrics(sample, profiler_scores, truth, detected, perfect,
     # breadth of coverage over found nodes, split into TP (in sample) / FP
     breadth = {True: [], False: []}
     for key in found:
-        b = node_breadth(os.path.join(auth_dir, profiler, sample,
-                                      profiler_scores[(sample, key)]["taxid"]))
+        b = breadths.get((sample, key))
         if b is not None:
             breadth[key in present].append(b)
 
@@ -463,7 +567,11 @@ def metric_rows(profiler, samples, per_sample):
 
 def call_rows(profiler, samples, profiler_scores, truth, detected, label,
               include_host, host_keys):
-    """One row per (sample, taxon) that is either simulated or authenticated."""
+    """One row per (sample, taxon) that is either simulated or authenticated.
+
+    Rows carry the join key under "_key" for the caller to resolve breadth with;
+    it is not in CALL_COLS, so it never reaches the TSV.
+    """
     rows = []
     for sample in samples:
         keys = sample_keys(sample, profiler_scores, truth, include_host, host_keys)
@@ -484,6 +592,7 @@ def call_rows(profiler, samples, profiler_scores, truth, detected, label,
                 "aligned_reads": rec["reads"] if rec else 0,
                 "krakenuniq_surfaced": "yes" if surfaced else "no",
                 "verdict": verdict_for(in_sample, score, surfaced),
+                "_key": key,
             })
     return rows
 
@@ -708,6 +817,9 @@ def parse_args(argv=None):
                     help="perfect score for a modern genome (default 6, the "
                          "empirical ceiling; use 5 for the on-merit value that "
                          "excludes the spuriously-earned ancient edit-distance point)")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="always remeasure breadth of coverage instead of "
+                         "reusing an auth_calls.tsv already in --outdir")
     ap.add_argument("--include-host", action="store_true",
                     help="keep host taxa (e.g. Homo sapiens); default drops them")
     return ap.parse_args(argv)
@@ -733,7 +845,7 @@ def discover_targets(auth_dir, profilers_arg):
 
 
 def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
-                       detected, tax):
+                       detected, tax, cache):
     """Render one profiler's heatmap and return its (metric rows, call rows)."""
     scores = load_profiler_scores(auth_dir, profiler, samples, tax)
     rows, label, smax = build_matrix(scores, truth, samples,
@@ -743,6 +855,18 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
         os.path.join(args.outdir, f"auth_summary_heatmap.{profiler}.pdf"),
         os.path.join(args.outdir, f"auth_summary_heatmap.{profiler}.png"))
 
+    # the calls are what a cached table is checked against, so they are built
+    # first, breadth-less; only measured nodes (scored, and plotted at all) are
+    # worth a depth pass -- the host's depth file is the largest of the lot.
+    calls = call_rows(profiler, samples, scores, truth, detected, label,
+                      args.include_host, host_keys)
+    needed = {(s, k) for (s, k), rec in scores.items()
+              if rec["score"] > 0 and (args.include_host or k not in host_keys)}
+    breadths = node_breadths(auth_dir, profiler, needed, scores, label,
+                             cache_for_profiler(cache, profiler, calls))
+    for row in calls:
+        row["breadth"] = fmt_breadth(breadths, row["sample"], row.pop("_key"))
+
     # keep integral targets integral: argparse applies type=float only to values
     # it actually parses, so otherwise the diff columns would switch between
     # "56" and "56.0" depending on whether --modern-score was passed
@@ -751,12 +875,10 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
                for k, v in perfect.items()}
     per_sample = {
         s: sample_metrics(s, scores, truth, detected, perfect,
-                          args.include_host, host_keys, auth_dir, profiler)
+                          args.include_host, host_keys, breadths)
         for s in samples
     }
-    return (metric_rows(profiler, samples, per_sample),
-            call_rows(profiler, samples, scores, truth, detected, label,
-                      args.include_host, host_keys))
+    return metric_rows(profiler, samples, per_sample), calls
 
 
 def main(argv=None):
@@ -772,16 +894,18 @@ def main(argv=None):
     detected = load_kraken_detected(args.results, samples, tax)
 
     os.makedirs(args.outdir, exist_ok=True)
+    out_calls = os.path.join(args.outdir, "auth_calls.tsv")
+    cache = {} if args.no_cache else load_call_cache(out_calls)
+
     metrics, calls = [], []
     for profiler in profilers:
         m, c = summarise_profiler(profiler, args, auth_dir, samples, truth,
-                                  host_keys, detected, tax)
+                                  host_keys, detected, tax, cache)
         metrics += m
         calls += c
 
     report_unresolved(tax)
 
-    out_calls = os.path.join(args.outdir, "auth_calls.tsv")
     write_tsv(out_calls, CALL_COLS, calls)
     print(f"\nPer-call detail -> {out_calls}")
     report_tally(calls)
