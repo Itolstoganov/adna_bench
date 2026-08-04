@@ -10,8 +10,8 @@ Bacterial component, two modes:
   * ``--bact-dir DIR``            symlink DIR straight in as ``bact`` (sim_bench;
                                   gargammel auto-composes from all fastas).
   * ``--bact-list FILE`` +        create ``bact/`` and symlink each species FASTA
-    ``--bact-genome-dir DIR``     named in the list from DIR, writing FILE to
-                                  ``bact/list`` (meta_bench; explicit composition).
+    ``--bact-genome-dir DIR``     named in the list from DIR, then re-emit FILE as
+                                  ``bact/list`` in readdir order.
 
 The fragment-size model, read length and damage flags are passed verbatim via
 ``--gargammel-args`` so each caller controls them (e.g. ``-l 40`` vs
@@ -24,6 +24,10 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+
+
+# The suffixes gargammel's listdirFa() (gargammel.pl:156) accepts as genomes.
+FASTA_SUFFIXES = (".fa", ".fa.gz", ".fna", ".fasta", ".fasta.gz")
 
 
 def symlink_relative(src: Path, dst: Path) -> None:
@@ -43,24 +47,45 @@ def setup_component(paths, workdir: Path, name: str) -> None:
 
 
 def setup_bact_from_list(bact_list: Path, genome_dir: Path, workdir: Path) -> None:
-    """Symlink each species FASTA named in bact_list into {workdir}/bact and
-    copy the list to bact/list."""
+    """Symlink each species FASTA named in bact_list into {workdir}/bact and write
+    bact/list back out in the directory's readdir order.
+
+    gargammel pairs weights with genomes by *position*, not by name: the weights are
+    read in list order (gargammel.pl:873) but spent on @arrayofFilesbact, which is
+    raw opendir/readdir order (gargammel.pl:828 -> :1341). It only ever checks that
+    the two sets of filenames are equal (:916-938), never their order. Emitting the list in os.listdir()
+    order makes position i mean the same genome on both sides.
+    """
     bact_dir = workdir / "bact"
     bact_dir.mkdir(parents=True, exist_ok=True)
-    listed = []
-    with open(bact_list) as f:
-        for line in f:
-            line = line.rstrip('\n')
-            if not line or line.startswith('#'):
-                continue
-            fname = line.split('\t')[0].split()[0]
-            listed.append(fname)
-            src = genome_dir / fname
-            if not src.exists():
-                sys.exit(f"Error: genome {src} referenced in {bact_list} not found")
-            symlink_relative(src, bact_dir / fname)
-    # Write the list verbatim so gargammel sees the exact abundances.
-    (bact_dir / "list").write_text(Path(bact_list).read_text())
+
+    weights = {}
+    for line in Path(bact_list).read_text().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) < 2:
+            sys.exit(f"Error: malformed line in {bact_list}: {line!r}")
+        fname = fields[0].split()[0]
+        src = genome_dir / fname
+        if not src.exists():
+            sys.exit(f"Error: genome {src} referenced in {bact_list} not found")
+        weights[fname] = fields[1]
+        symlink_relative(src, bact_dir / fname)
+
+    # Drop genomes left over from an earlier run with a different list: gargammel
+    # would still count them as bacterial inputs and shift every index past them.
+    for entry in bact_dir.iterdir():
+        if entry.name.endswith(FASTA_SUFFIXES) and entry.name not in weights:
+            entry.unlink()
+            (bact_dir / f"{entry.name}.fai").unlink(missing_ok=True)
+
+    readdir_order = [e for e in os.listdir(bact_dir) if e.endswith(FASTA_SUFFIXES)]
+    if sorted(readdir_order) != sorted(weights):
+        sys.exit(f"Error: {bact_dir} holds {sorted(readdir_order)}, "
+                 f"but {bact_list} names {sorted(weights)}")
+    (bact_dir / "list").write_text(
+        "".join(f"{name}\t{weights[name]}\n" for name in readdir_order))
 
 
 def main() -> None:
