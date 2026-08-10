@@ -86,13 +86,36 @@ METRIC_COLS = ["profiler", "sample"] + [name for name, _ in METRIC_SPEC]
 
 CALL_COLS = ["profiler", "sample", "taxon", "category", "truth_reads",
              "truth_frac", "score", "aligned_reads", "krakenuniq_surfaced",
-             "verdict", "breadth"]
+             "verdict", "breadth", "evenness"]
+
+# The auth_calls.tsv columns measured off a node's per-base depth file, and how
+# each is rendered. Both come from one pass, so both are cached together.
+COVERAGE_COLS = (("breadth", "{:.6f}"), ("evenness", "{:.4f}"))
 
 # A cached row is identified by these, and reusable only if every column that is
 # not `breadth` still agrees -- i.e. the samples, their composition and what the
 # profiler did with them are unchanged.
 CACHE_KEY_COLS = ("profiler", "sample", "taxon")
-COMPOSITION_COLS = [c for c in CALL_COLS if c != "breadth"]
+COMPOSITION_COLS = [c for c in CALL_COLS
+                    if c not in [name for name, _ in COVERAGE_COLS]]
+
+CAT_COLOR = {
+    "ancient": (0.15, 0.65, 0.20),   # green
+    "modern": (0.20, 0.45, 0.85),    # blue
+    "absent": (0.85, 0.20, 0.20),    # red
+}
+WHITE = (1.0, 1.0, 1.0)
+
+
+def blend(base, intensity):
+    """White -> base colour by intensity in [0,1], floored so it stays visible."""
+    a = 0.30 + 0.70 * max(0.0, min(1.0, intensity))
+    return tuple(1.0 * (1 - a) + c * a for c in base)
+
+
+def luminance(rgb):
+    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.750 * rgb[2]
+
 
 # meta_bench/genomes, i.e. next to this script's parent -- the FASTAs the
 # simulation drew from, which the ANI comparison measures the profilers'
@@ -299,63 +322,108 @@ def read_score_folder(folder):
     return organism, score
 
 
-def read_node_reads(folder):
-    """Aligned reads on the node's reference (TotalAlignmentsOnReference), or 0.
+def node_table(path):
+    """{column: value} for a one-data-row MaltExtract table, or {} if unreadable.
 
-    Handles both MaltExtract's layout (header carries the column, no rowname) and
-    the ngsLCA layout (header omits the leading taxid rowname the data row
-    carries), so the columns cannot simply be zipped by a DictReader.
+    Handles both layouts: MaltExtract writes a rowname header ("Taxon" plus the
+    columns), while the ngsLCA extractor omits it and its data row is one field
+    longer than the header -- so the two cannot simply be zipped by a DictReader.
     """
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as fh:
+        rows = [r for r in csv.reader(fh, delimiter="\t") if any(r)]
+    if len(rows) < 2:
+        return {}
+    header, data = rows[0], rows[1]
+    vals = data[1:] if len(data) == len(header) + 1 else data
+    return dict(zip(header, vals))
+
+
+def read_node_reads(folder):
+    """Aligned reads on the node's reference (TotalAlignmentsOnReference), or 0."""
     rd = os.path.join(folder, "MaltExtract_output", "default", "readDist")
     if not os.path.isdir(rd):
         return 0
-    for fn in os.listdir(rd):
-        if not fn.endswith("_alignmentDist.txt"):
-            continue
-        with open(os.path.join(rd, fn)) as fh:
-            rows = [r for r in csv.reader(fh, delimiter="\t") if any(r)]
-        if len(rows) < 2:
-            return 0
-        header, data = rows[0], rows[1]
-        vals = data[1:] if len(data) == len(header) + 1 else data
-        cell = dict(zip(header, vals)).get("TotalAlignmentsOnReference", 0)
-        try:
-            return int(float(cell))
-        except (ValueError, TypeError):
-            return 0
+    for fn in sorted(os.listdir(rd)):
+        if fn.endswith("_alignmentDist.txt"):
+            cell = node_table(os.path.join(rd, fn)).get(
+                "TotalAlignmentsOnReference", 0)
+            try:
+                return int(float(cell))
+            except (ValueError, TypeError):
+                return 0
     return 0
 
 
-def node_breadth(folder):
-    """Breadth of coverage: fraction of reference positions with depth > 0.
+# breadth and score.R's evenness statistic in one pass: tile the reference into
+# 100 percentile bins, count the bases sitting in bins that are under 1% covered,
+# and report that in bins' worth (score.R lines 29-41, `sum(V4<0.01)/step`).
+AWK_COVERAGE = (
+    'BEGIN{step=(hi-lo)/100}'
+    '{t++; if($3>0) c++;'
+    ' if(step>0){i=int($2/step); if(i<100){n[i]++; if($3>0) k[i]++}}}'
+    'END{if(t==0) exit;'
+    ' for(i=0;i<100;i++) if(n[i] && k[i]/n[i]<0.01) bad+=n[i];'
+    ' printf "%.6f\\t%s", c/t, (step>0 ? sprintf("%.4f", bad/step) : "NA")}'
+)
 
-    This is the "X% of genome covered" figure aMeta prints on its evenness-of-
-    coverage plot. Computed from the per-base `samtools depth -a` file
-    (`breadth_of_coverage`, cols: ref, pos, depth) with awk, since those files are
-    large (up to hundreds of MB). Returns a float in [0, 1], or None if unavailable.
+
+def last_line(path, tail_bytes=4096):
+    """The last non-empty line, read from the end rather than by scanning."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, fh.tell() - tail_bytes))
+        lines = fh.read().decode(errors="replace").splitlines()
+    for line in reversed(lines):
+        if line.strip():
+            return line
+    return ""
+
+
+def node_coverage(folder):
+    """(breadth, evenness) for one node, from a single pass over its depth file.
+
+    breadth is the fraction of reference positions with depth > 0 -- the "X% of
+    genome covered" figure aMeta prints on its evenness plot. evenness is the
+    statistic score.R thresholds at < 3 for its two evenness points. Both come off
+    the same `samtools depth -a` file, which runs to hundreds of MB, so they are
+    measured together; the tile width needs the first and last position, and those
+    are read directly off the ends instead of by scanning. Either may be None.
     """
     path = os.path.join(folder, "breadth_of_coverage")
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
-        return None
+        return None, None
     try:
-        r = subprocess.run(
-            ["awk", '{t++; if($3>0) c++} END{if(t>0) printf "%.6f", c/t}', path],
-            capture_output=True, text=True)
+        with open(path) as fh:
+            first = fh.readline().split("\t")
+        last = last_line(path).split("\t")
+        lo, hi = int(first[1]), int(last[1])
+    except (OSError, IndexError, ValueError):
+        return None, None
+    try:
+        r = subprocess.run(["awk", "-v", f"lo={lo}", "-v", f"hi={hi}",
+                            AWK_COVERAGE, path], capture_output=True, text=True)
     except OSError:
-        return None
-    out = r.stdout.strip()
-    try:
-        return float(out) if out else None
-    except ValueError:
-        return None
+        return None, None
+    fields = r.stdout.strip().split("\t")
+    if len(fields) != 2:
+        return None, None
+
+    def parse(text):
+        try:
+            return None if text == "NA" else float(text)
+        except ValueError:
+            return None
+    return parse(fields[0]), parse(fields[1])
 
 
-def fmt_breadth(breadths, sample, key):
-    """Render a breadth cell: blank when the node was never measured, else NA/value."""
-    if (sample, key) not in breadths:
+def fmt_coverage(coverage, sample, key, index):
+    """Render one coverage cell: blank if never measured, else NA or the value."""
+    if (sample, key) not in coverage:
         return ""
-    value = breadths[(sample, key)]
-    return "NA" if value is None else f"{value:.6f}"
+    value = coverage[(sample, key)][index]
+    return "NA" if value is None else COVERAGE_COLS[index][1].format(value)
 
 
 def load_call_cache(path):
@@ -364,28 +432,30 @@ def load_call_cache(path):
         return {}
     with open(path) as fh:
         reader = csv.DictReader(fh, delimiter="\t")
-        if not reader.fieldnames or "breadth" not in reader.fieldnames:
-            print(f"Breadth cache: ignoring {path} (no breadth column -- written "
-                  f"by an older version of this script)")
+        missing = [c for c, _ in COVERAGE_COLS
+                   if c not in (reader.fieldnames or [])]
+        if missing:
+            print(f"Coverage cache: ignoring {path} (no {', '.join(missing)} "
+                  f"column -- written by an older version of this script)")
             return {}
         rows = list(reader)
     cache = {}
     for row in rows:
         key = tuple(row.get(c, "") for c in CACHE_KEY_COLS)
         cache.setdefault(row.get("profiler", ""), {})[key] = row
-    print(f"Breadth cache: {path} ({len(rows)} row(s), {len(cache)} profiler(s))")
+    print(f"Coverage cache: {path} ({len(rows)} row(s), {len(cache)} profiler(s))")
     return cache
 
 
 def cache_for_profiler(cache, profiler, calls):
-    """Cached breadths for `profiler` as (sample, taxon) -> float|None, or {}.
+    """Cached coverage for `profiler` as (sample, taxon) -> (breadth, evenness).
 
-    Breadth is measured off one `samtools depth` file per authenticated node, so
+    Coverage is measured off one `samtools depth` file per authenticated node, so
     a cached value only carries over when this run is looking at the same nodes
     of the same samples. Rather than guess which columns could move independently
-    of the depth files, this demands that *every* non-breadth column match: the
-    same (sample, taxon) rows, the same simulated read counts and fractions, the
-    same scores, aligned reads and verdicts. Any disagreement discards the whole
+    of the depth files, this demands that *every* other column match: the same
+    (sample, taxon) rows, the same simulated read counts and fractions, the same
+    scores, aligned reads and verdicts. Any disagreement discards the whole
     profiler's cache -- a partial reuse would be reporting numbers from two
     different runs in one table.
     """
@@ -408,7 +478,7 @@ def cache_for_profiler(cache, profiler, calls):
 
     if complaints:
         print(f"  [{profiler}] cached calls do not match this run "
-              f"({len(complaints)} row(s)), remeasuring breadth:")
+              f"({len(complaints)} row(s)), remeasuring coverage:")
         for line in complaints[:5]:
             print(f"      {line}")
         if len(complaints) > 5:
@@ -417,18 +487,21 @@ def cache_for_profiler(cache, profiler, calls):
 
     out = {}
     for (_p, sample, taxon), row in cached.items():
-        text = (row.get("breadth") or "").strip()
-        if not text:                       # never measured -- not a cache hit
+        texts = [(row.get(c) or "").strip() for c, _ in COVERAGE_COLS]
+        if not any(texts):                 # never measured -- not a cache hit
             continue
-        try:
-            out[(sample, taxon)] = None if text == "NA" else float(text)
-        except ValueError:
-            continue
+
+        def parse(text):
+            try:
+                return None if text in ("", "NA") else float(text)
+            except ValueError:
+                return None
+        out[(sample, taxon)] = tuple(parse(t) for t in texts)
     return out
 
 
-def node_breadths(auth_dir, profiler, needed, scores, label, cached):
-    """(sample, key) -> breadth for the nodes in `needed`, reusing `cached`."""
+def node_coverages(auth_dir, profiler, needed, scores, label, cached):
+    """(sample, key) -> (breadth, evenness) for `needed`, reusing `cached`."""
     out, reused = {}, 0
     for sample, key in needed:
         hit = (sample, label.get(key, key))
@@ -436,10 +509,10 @@ def node_breadths(auth_dir, profiler, needed, scores, label, cached):
             out[(sample, key)] = cached[hit]
             reused += 1
             continue
-        out[(sample, key)] = node_breadth(
+        out[(sample, key)] = node_coverage(
             os.path.join(auth_dir, profiler, sample, scores[(sample, key)]["taxid"]))
     if reused:
-        print(f"  [{profiler}] breadth: {reused} node(s) from cache, "
+        print(f"  [{profiler}] coverage: {reused} node(s) from cache, "
               f"{len(needed) - reused} measured")
     return out
 
@@ -536,7 +609,7 @@ def _mean(vals):
 
 
 def sample_metrics(sample, profiler_scores, truth, detected, perfect,
-                   include_host, host_keys, breadths):
+                   include_host, host_keys, coverage):
     """The METRIC_SPEC metrics for one (profiler, sample), as a name -> value dict."""
     keys = sample_keys(sample, profiler_scores, truth, include_host, host_keys)
     surfaced = detected.get(sample, set())
@@ -562,9 +635,9 @@ def sample_metrics(sample, profiler_scores, truth, detected, perfect,
     # breadth of coverage over found nodes, split into TP (in sample) / FP
     breadth = {True: [], False: []}
     for key in found:
-        b = breadths.get((sample, key))
-        if b is not None:
-            breadth[key in present].append(b)
+        cov = coverage.get((sample, key))
+        if cov and cov[0] is not None:
+            breadth[key in present].append(cov[0])
 
     reads = [rec["reads"] for (s, k), rec in profiler_scores.items()
              if s == sample and (include_host or k not in host_keys)]
@@ -619,6 +692,300 @@ def call_rows(profiler, samples, profiler_scores, truth, detected, label,
                 "_key": key,
             })
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# score.R's criteria, per node
+# --------------------------------------------------------------------------- #
+# The ten points score.R awards, and what ground truth says each should do. It is
+# an *ancient* DNA authentication score, so the expectation depends on what the
+# simulation put in the sample:
+#
+#   absent  -- nothing should fire: the organism is not there at all.
+#   ancient -- everything should fire: it is present, damaged and short.
+#   modern  -- the four damage-dependent criteria should NOT fire, and the rest
+#              should. Failing them is the score working correctly, so counting
+#              those failures as misses would invert the meaning of the table.
+#              Read length is one of the four: it is a proxy for ancient
+#              fragmentation, and gargammel's modern pass draws longer fragments
+#              (empirical sizefreq, 83% under 100bp) than its ancient one
+#              (lognormal, median ~42bp), so a modern genome cannot reach it.
+#
+# (name, points, expected of an ancient genome, expected of a modern one)
+CRITERIA = (
+    ("damage C>T_1",            1, True, False),
+    ("damage G>A_20",           1, True, False),
+    ("evenness of coverage",    2, True, True),
+    ("edit distance (all)",     1, True, True),
+    ("edit distance (ancient)", 1, True, False),
+    ("PMD",                     1, True, False),
+    ("read length",             1, True, False),
+    ("depth of coverage",       1, True, True),
+    ("ANI",                     1, True, True),
+)
+CRITERIA_EXPECTED = {"ancient": [c[2] for c in CRITERIA],
+                     "modern": [c[3] for c in CRITERIA],
+                     "absent": [False] * len(CRITERIA)}
+
+
+def _num(text):
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _decreasing(values):
+    return all(values[i] > values[i + 1] for i in range(len(values) - 1))
+
+
+def node_criteria(folder, rma6, evenness):
+    """Which of the CRITERIA this node satisfies, as a list of bools.
+
+    A transcription of score.R against the same files it reads. `evenness` is
+    passed in because it is measured off the per-base depth file alongside
+    breadth (see node_coverage) rather than re-read here.
+    """
+    m = os.path.join(folder, "MaltExtract_output")
+    dam = node_table(f"{m}/default/damageMismatch/{rma6}_damageMismatch.txt")
+    ed_all = node_table(f"{m}/default/editDistance/{rma6}_editDistance.txt")
+    ed_anc = node_table(f"{m}/ancient/editDistance/{rma6}_editDistance.txt")
+    dist = node_table(f"{m}/default/readDist/{rma6}_alignmentDist.txt")
+    pid = node_table(f"{m}/default/percentIdentity/{rma6}_percentIdentity.txt")
+
+    pmd_path = os.path.join(folder, "PMDscores.txt")
+    pmd = False
+    if os.path.isfile(pmd_path) and os.path.getsize(pmd_path):
+        scores = [_num(l.split("\t")[3]) for l in open(pmd_path)
+                  if len(l.split("\t")) > 3]
+        pmd = bool(scores) and sum(v > 3 for v in scores) / len(scores) > 0.1
+
+    lengths_path = os.path.join(folder, "read_length.txt")
+    short = False
+    if os.path.isfile(lengths_path):
+        lengths = [_num(l) for l in open(lengths_path) if l.strip()]
+        short = bool(lengths) and sum(v < 100 for v in lengths) / len(lengths) > 0.9
+
+    a, b, c = (_num(pid.get(k)) for k in ("90", "95", "100"))
+    total = a + b + c
+    ani = total == total and total != 0 and \
+        (a * 90 + b * 95 + c * 100) / total > 97
+
+    return [
+        round(_num(dam.get("C>T_1")), 4) > 0.05,
+        round(_num(dam.get("G>A_20")), 4) > 0.05,
+        evenness is not None and evenness < 3,
+        _decreasing([_num(ed_all.get(str(i))) for i in range(5)]),
+        _decreasing([_num(ed_anc.get(str(i))) for i in range(1, 5)]),
+        pmd,
+        short,
+        _num(dist.get("TotalAlignmentsOnReference")) > 200,
+        ani,
+    ]
+
+
+def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
+                    host_keys, include_host, detected):
+    """Per-criterion (FP, FN, expected-pass, expected-fail, skipped) for a profiler.
+
+    Every node the profiler scored is a trial. Its ground-truth category fixes
+    what each criterion should have done, and the node's own tables say what it
+    did: a criterion that fired when it should not have is a false positive, one
+    that stayed silent when it should have fired is a false negative.
+
+    The trials are KrakenUniq-adjusted at both ends. An in-sample taxon KrakenUniq
+    never surfaced has no node, so it is never charged a false negative -- it was
+    never the authentication step's to find. In the other direction a node whose
+    taxon is absent from *this* run's taxID.species is skipped: aMeta creates node
+    directories with `mkdir -p` and never prunes them, and its checkpoints glob the
+    directory listing rather than the species file, so a results directory reused
+    across runs keeps authenticating (and scoring) whatever an earlier KrakenUniq
+    screen turned up. Judging those would charge the profiler for a leftover
+    directory.
+
+    A node scoring 0 failed everything -- score.R only ever adds -- so it is
+    counted without touching the filesystem, which is also why coverage is only
+    ever measured for the nodes that scored.
+    """
+    n = len(CRITERIA)
+    fp, fn, exp_pass, exp_fail = [0] * n, [0] * n, [0] * n, [0] * n
+    skipped = 0
+    for (sample, key), rec in scores.items():
+        if not include_host and key in host_keys:
+            continue
+        if key not in detected.get(sample, set()):
+            skipped += 1
+            continue
+        category = (truth[key]["category"] if is_present(truth, key, sample)
+                    else "absent")
+        expected = CRITERIA_EXPECTED[category]
+        if rec["score"] > 0:
+            cov = coverage.get((sample, key))
+            got = node_criteria(
+                os.path.join(auth_dir, profiler, sample, rec["taxid"]),
+                f"{sample}.trimmed.rma6", cov[1] if cov else None)
+        else:
+            got = [False] * n
+        for i, (want, have) in enumerate(zip(expected, got)):
+            exp_pass[i] += want
+            exp_fail[i] += not want
+            fp[i] += have and not want
+            fn[i] += want and not have
+    return fp, fn, exp_pass, exp_fail, skipped
+
+
+def criteria_rows(profilers, auth_dir, samples, scores_by_profiler, truth,
+                  coverage_by_profiler, host_keys, include_host, detected):
+    """(rows, skipped): one row per criterion, each profiler's FP/FN side by side."""
+    per_profiler = {
+        p: criteria_counts(p, auth_dir, samples, scores_by_profiler[p], truth,
+                           coverage_by_profiler[p], host_keys, include_host,
+                           detected)
+        for p in profilers
+    }
+    rows = []
+    for i, (name, points, _anc, _mod) in enumerate(CRITERIA):
+        row = {"criterion": name, "points": points}
+        for p in profilers:
+            fp, fn, exp_pass, exp_fail, _skipped = per_profiler[p]
+            row[f"{p}_FP"] = fp[i]
+            row[f"{p}_FN"] = fn[i]
+            row[f"{p}_expected_pass"] = exp_pass[i]
+            row[f"{p}_expected_fail"] = exp_fail[i]
+        rows.append(row)
+    return rows, {p: per_profiler[p][4] for p in profilers}
+
+
+# FP reuses the heatmap's "not in sample" red, so a false positive reads the same
+# across both figures; FN gets its own amber rather than the heatmap's blue, which
+# already means "modern".
+FP_COLOR = CAT_COLOR["absent"]
+FN_COLOR = (0.90, 0.55, 0.10)
+
+
+def expected_label(index):
+    """Which ground-truth categories should fire criterion `index`."""
+    _name, _pts, ancient, modern = CRITERIA[index]
+    return "ancient + modern" if ancient and modern else "ancient only"
+
+
+def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped):
+    """Draw the FP/FN table as a figure, cells shaded by count."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    widths = [2.5, 0.42, 1.35] + [0.62, 0.62] * len(profilers)
+    edges = [0.0]
+    for w in widths:
+        edges.append(edges[-1] + w)
+    span = edges[-1]
+
+    nbody = len(rows)
+    nrow = nbody + 3                       # 2 header rows + body + total
+    rh = 0.30                              # row height, same units as widths
+    fig_w, fig_h = span + 0.3, nrow * rh + 1.15
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, span)
+    ax.set_ylim(0, nrow * rh)
+    ax.axis("off")
+
+    def y(row):                            # row 0 is the top header
+        return (nrow - 1 - row) * rh
+
+    def cell(col, row, text, *, face=None, weight="normal", align="center",
+             color="black", size=8, ncols=1):
+        x0, x1 = edges[col], edges[col + ncols]
+        if face is not None:
+            ax.add_patch(Rectangle((x0, y(row)), x1 - x0, rh, facecolor=face,
+                                   edgecolor="white", lw=0.8, zorder=1))
+        pad = 0.06
+        tx = {"center": (x0 + x1) / 2, "left": x0 + pad, "right": x1 - pad}[align]
+        ax.text(tx, y(row) + rh / 2, text, ha=align, va="center", fontsize=size,
+                color=color, fontweight=weight, zorder=2)
+
+    header = (0.90, 0.90, 0.92)
+    cell(0, 0, "", face=header)
+    cell(1, 0, "", face=header)
+    cell(2, 0, "should fire for", face=header, weight="bold", size=7.5)
+    for i, p in enumerate(profilers):
+        cell(3 + 2 * i, 0, p, face=header, weight="bold", ncols=2)
+    for col, text in ((0, "criterion"), (1, "pts")):
+        cell(col, 1, text, face=header, weight="bold",
+             align="left" if col == 0 else "center")
+    cell(2, 1, "", face=header)
+    for i, _p in enumerate(profilers):
+        cell(3 + 2 * i, 1, "FP", face=header, weight="bold", color=FP_COLOR)
+        cell(4 + 2 * i, 1, "FN", face=header, weight="bold", color=FN_COLOR)
+
+    max_fp = max((r[f"{p}_FP"] for r in rows for p in profilers), default=1) or 1
+    max_fn = max((r[f"{p}_FN"] for r in rows for p in profilers), default=1) or 1
+    for j, row in enumerate(rows):
+        r = j + 2
+        stripe = (1, 1, 1) if j % 2 else (0.965, 0.965, 0.975)
+        cell(0, r, row["criterion"], face=stripe, align="left")
+        cell(1, r, str(row["points"]), face=stripe)
+        cell(2, r, expected_label(j), face=stripe, size=7, color="0.35")
+        for i, p in enumerate(profilers):
+            for col, value, base, top in ((3 + 2 * i, row[f"{p}_FP"], FP_COLOR, max_fp),
+                                          (4 + 2 * i, row[f"{p}_FN"], FN_COLOR, max_fn)):
+                face = blend(base, value / top) if value else stripe
+                cell(col, r, str(value), face=face,
+                     color="white" if luminance(face) < 0.55 else "black")
+
+    r = nbody + 2
+    cell(0, r, "total", face=header, weight="bold", align="left")
+    cell(1, r, str(sum(x["points"] for x in rows)), face=header, weight="bold")
+    cell(2, r, "", face=header)
+    for i, p in enumerate(profilers):
+        cell(3 + 2 * i, r, str(sum(x[f"{p}_FP"] for x in rows)), face=header,
+             weight="bold")
+        cell(4 + 2 * i, r, str(sum(x[f"{p}_FN"] for x in rows)), face=header,
+             weight="bold")
+
+    ax.set_title("Authentication criteria results",
+                 fontsize=11, pad=12)
+    note = ("FP = criterion fired where ground truth says it should not; "
+            "FN = vice versa")
+            # + "   ".join(f"{p}: {judged[p]} node(s) judged"
+            #              + (f", {skipped[p]} skipped (not in this run's "
+            #                 f"KrakenUniq output)" if skipped[p] else "")
+            #              for p in profilers))
+    fig.text(0.5, 0.012, note, ha="center", va="bottom", fontsize=7, color="0.35")
+
+    fig.savefig(out_pdf, bbox_inches="tight")
+    fig.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Criteria table -> {out_pdf}")
+
+
+def print_criteria_table(rows, profilers, judged, skipped):
+    """The FP/FN table, profilers across the top and criteria down the side."""
+    width = max(len(r["criterion"]) for r in rows) + 2
+    cell = 6
+    head1 = " " * (width + 5) + "|" + "|".join(
+        p.center(cell * 2 + 1) for p in profilers) + "|"
+    head2 = f"{'criterion':<{width}}{'pts':>4} |" + "|".join(
+        f"{'FP':>{cell}}{'FN':>{cell + 1}}" for _ in profilers) + "|"
+    print("\n" + head1)
+    print(head2)
+    print("-" * len(head2))
+    for r in rows:
+        line = f"{r['criterion']:<{width}}{r['points']:>4} |"
+        for p in profilers:
+            line += f"{r[f'{p}_FP']:>{cell}}{r[f'{p}_FN']:>{cell + 1}}|"
+        print(line)
+    print("-" * len(head2))
+    totals = f"{'total':<{width}}{sum(r['points'] for r in rows):>4} |"
+    for p in profilers:
+        totals += (f"{sum(r[f'{p}_FP'] for r in rows):>{cell}}"
+                   f"{sum(r[f'{p}_FN'] for r in rows):>{cell + 1}}|")
+    print(totals)
+    for p in profilers:
+        extra = (f", {skipped[p]} skipped (not in this run's KrakenUniq output)"
+                 if skipped.get(p) else "")
+        print(f"  {p}: {judged[p]} node(s) judged{extra}")
 
 
 # --------------------------------------------------------------------------- #
@@ -1083,24 +1450,6 @@ def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples):
 # --------------------------------------------------------------------------- #
 # Plotting
 # --------------------------------------------------------------------------- #
-CAT_COLOR = {
-    "ancient": (0.15, 0.65, 0.20),   # green
-    "modern": (0.20, 0.45, 0.85),    # blue
-    "absent": (0.85, 0.20, 0.20),    # red
-}
-WHITE = (1.0, 1.0, 1.0)
-
-
-def blend(base, intensity):
-    """White -> base colour by intensity in [0,1], floored so it stays visible."""
-    a = 0.30 + 0.70 * max(0.0, min(1.0, intensity))
-    return tuple(1.0 * (1 - a) + c * a for c in base)
-
-
-def luminance(rgb):
-    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.750 * rgb[2]
-
-
 def build_matrix(profiler_scores, truth, samples, include_host, host_keys, tax):
     """Assemble the ordered rows, their labels, and the intensity normalisation."""
     # every authenticated node earns a row, including one that scored 0 in every
@@ -1367,24 +1716,28 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
         os.path.join(args.outdir, f"auth_summary_heatmap.{profiler}.png"))
 
     # the calls are what a cached table is checked against, so they are built
-    # first, breadth-less; only measured nodes (scored, and plotted at all) are
-    # worth a depth pass -- the host's depth file is the largest of the lot.
+    # first, coverage-less; only measured nodes (scored, and plotted at all) are
+    # worth a depth pass -- the host's depth file is the largest of the lot. A
+    # node that scored 0 failed every criterion by construction, so it needs no
+    # measurement for either the metrics or the criteria table.
     calls = call_rows(profiler, samples, scores, truth, detected, label,
                       args.include_host, host_keys)
     needed = {(s, k) for (s, k), rec in scores.items()
               if rec["score"] > 0 and (args.include_host or k not in host_keys)}
-    breadths = node_breadths(auth_dir, profiler, needed, scores, label,
-                             cache_for_profiler(cache, profiler, calls))
+    coverage = node_coverages(auth_dir, profiler, needed, scores, label,
+                              cache_for_profiler(cache, profiler, calls))
     for row in calls:
-        row["breadth"] = fmt_breadth(breadths, row["sample"], row.pop("_key"))
+        key = row.pop("_key")
+        for index, (name, _fmt) in enumerate(COVERAGE_COLS):
+            row[name] = fmt_coverage(coverage, row["sample"], key, index)
 
     perfect = perfect_scores(args)
     per_sample = {
         s: sample_metrics(s, scores, truth, detected, perfect,
-                          args.include_host, host_keys, breadths)
+                          args.include_host, host_keys, coverage)
         for s in samples
     }
-    return metric_rows(profiler, samples, per_sample), calls, scores
+    return metric_rows(profiler, samples, per_sample), calls, scores, coverage
 
 
 def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
@@ -1454,13 +1807,32 @@ def main(argv=None):
     out_calls = os.path.join(args.outdir, "auth_calls.tsv")
     cache = {} if args.no_cache else load_call_cache(out_calls)
 
-    metrics, calls, scores_by_profiler = [], [], {}
+    metrics, calls = [], []
+    scores_by_profiler, coverage_by_profiler = {}, {}
     for profiler in profilers:
-        m, c, s = summarise_profiler(profiler, args, auth_dir, samples, truth,
-                                     host_keys, detected, tax, cache)
+        m, c, s, cov = summarise_profiler(profiler, args, auth_dir, samples,
+                                          truth, host_keys, detected, tax, cache)
         metrics += m
         calls += c
         scores_by_profiler[profiler] = s
+        coverage_by_profiler[profiler] = cov
+
+    crit_rows, crit_skipped = criteria_rows(
+        profilers, auth_dir, samples, scores_by_profiler, truth,
+        coverage_by_profiler, host_keys, args.include_host, detected)
+    crit_cols = ["criterion", "points"] + [
+        f"{p}_{suffix}" for p in profilers
+        for suffix in ("FP", "FN", "expected_pass", "expected_fail")]
+    out_crit = os.path.join(args.outdir, "auth_criteria.tsv")
+    write_tsv(out_crit, crit_cols, crit_rows)
+    print(f"\nPer-criterion FP/FN -> {out_crit}")
+    judged = {p: crit_rows[0][f"{p}_expected_pass"]
+                 + crit_rows[0][f"{p}_expected_fail"] for p in profilers}
+    render_criteria_table(crit_rows, profilers,
+                          os.path.join(args.outdir, "auth_criteria_table.pdf"),
+                          os.path.join(args.outdir, "auth_criteria_table.png"),
+                          judged, crit_skipped)
+    print_criteria_table(crit_rows, profilers, judged, crit_skipped)
 
     if not args.no_ani:
         summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples,
