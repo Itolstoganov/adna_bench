@@ -32,4 +32,10 @@ dependencies:
   - gsl
   - seq-gen
   - perl
+  # meta_bench/scripts/auth_summary.py: skani bindings for the ANI between each
+  # authentication reference and the genome the simulation drew from. The
+  # bindings, not the skani CLI, so the summary makes no external calls.
+  - pip
+  - pip:
+      - pyskani
 

@@ -16,7 +16,18 @@ produces, for every profiler:
      ignoring taxa KrakenUniq never surfaced), `jaccard_all`/`jaccard_ancient`
      (found with score > 0 vs in-sample truth), `mean_reads_per_node`, and
      `evenness_tp`/`evenness_fp` (breadth of coverage over true/false positives).
-  3. `auth_calls.tsv`: one row per (profiler, sample, taxon) with read support,
+  3. `auth_ani.tsv` + `auth_ani_scatter.{pdf,png}`: skani ANI between the
+     reference a taxon was authenticated against and the genome the simulation
+     actually drew its reads from, against that taxon's mean KrakenUniq-adjusted
+     score deficit (the TSV carries the unadjusted one too). One point per
+     (profiler, taxon) over the *ancient* taxa KrakenUniq surfaced at least once
+     -- a modern genome's deficit is set by the damage criteria it cannot reach,
+     not by its reference, so it is tabulated but not plotted.
+     This is the diagnostic for score deficits that are a property of the
+     reference database rather than of the profiler: several score.R criteria
+     (edit distance, ANI, evenness) compare reads to the *top reference*, which
+     is only the simulated genome when that genome is in the aMeta reference DB.
+  4. `auth_calls.tsv`: one row per (profiler, sample, taxon) with read support,
      score, breadth of coverage and a TP/FP/FN verdict -- the per-cell backing
      for both of the above. It doubles as a cache: breadth is the one column that
      costs a full pass over a `samtools depth -a` file per node, so on a rerun an
@@ -43,6 +54,8 @@ false negative.
 
 import argparse
 import csv
+import importlib.util
+import math
 import os
 import re
 import subprocess
@@ -80,6 +93,12 @@ CALL_COLS = ["profiler", "sample", "taxon", "category", "truth_reads",
 # profiler did with them are unchanged.
 CACHE_KEY_COLS = ("profiler", "sample", "taxon")
 COMPOSITION_COLS = [c for c in CALL_COLS if c != "breadth"]
+
+# meta_bench/genomes, i.e. next to this script's parent -- the FASTAs the
+# simulation drew from, which the ANI comparison measures the profilers'
+# authentication references against.
+DEFAULT_GENOMES = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "genomes")
 
 
 # --------------------------------------------------------------------------- #
@@ -210,8 +229,12 @@ def load_truth(spec, samples, tax):
     (Homo_sapiens_ancient / _modern, both 9606) collapse into one row.
 
     Returns (truth, host_keys) where truth is
-      key -> {category, display, abund:{sample: frac}, reads:{sample: n}}
-    and `frac` is the taxon's share of that sample's reads.
+      key -> {category, display, genome, abund:{sample: frac}, reads:{sample: n}}
+    and `frac` is the taxon's share of that sample's reads. `genome` keeps the
+    raw truth.tsv label, which is the basename of the FASTA gargammel drew from
+    (`Sorangium_cellulosum` -> genomes/Sorangium_cellulosum.fa) and so is what
+    locates the simulated genome again for the ANI comparison; `display` is the
+    same thing prettified for the tables and plots.
     """
     truth, host_keys = {}, set()
     for sample in samples:
@@ -242,6 +265,7 @@ def load_truth(spec, samples, tax):
             info = truth.setdefault(key, {
                 "category": "modern",
                 "display": display_from_basename(row.taxon),
+                "genome": row.taxon,
                 "abund": {}, "reads": {},
             })
             info["reads"][sample] = int(row.reads)
@@ -598,6 +622,465 @@ def call_rows(profiler, samples, profiler_scores, truth, detected, label,
 
 
 # --------------------------------------------------------------------------- #
+# ANI: authentication reference vs simulated genome
+# --------------------------------------------------------------------------- #
+ANI_COLS = ["profiler", "taxid", "taxon", "category", "auth_ref", "sim_genome",
+            "ani", "aligned_frac_sim", "aligned_frac_auth",
+            "mean_diff_kraken_adjusted", "mean_diff_full", "mean_truth_frac",
+            "abund_intensity", "samples_present", "samples_scored", "plotted"]
+ANI_PLACES = {"ani": 2, "aligned_frac_sim": 3, "aligned_frac_auth": 3,
+              "mean_diff_kraken_adjusted": 2, "mean_diff_full": 2,
+              "mean_truth_frac": 5, "abund_intensity": 3}
+
+# The scatter's y axis. The KrakenUniq-adjusted deficit is the one that says
+# something about authentication: a taxon KrakenUniq never surfaced was never
+# offered to the profiler, so the whole authentication chain never ran for it and
+# its full deficit measures the screening step instead of the scoring.
+Y_METRIC = "mean_diff_kraken_adjusted"
+
+
+def read_contigs(path):
+    """Yield each FASTA record's sequence as one bytes object, for pyskani."""
+    name, seq = None, []
+    with open(path) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if name is not None:
+                    yield b"".join(seq)
+                name, seq = line[1:].strip(), []
+            elif name is not None:
+                seq.append(line.strip().encode())
+    if name is not None:
+        yield b"".join(seq)
+
+
+def skani_ani(auth_fasta, sim_fasta, cache):
+    """(ANI%, frac of sim aligned, frac of auth aligned), or None if no hit.
+
+    Uses the pyskani bindings rather than the skani CLI so the measurement needs
+    no external process and no temporary sketch files. skani screens out pairs it
+    cannot align (below roughly 80% ANI, or too little shared sequence) by
+    returning no hit at all -- that is reported as None rather than as a number,
+    since "too divergent to align" is not the same as a low ANI estimate.
+    """
+    hit = cache.get((auth_fasta, sim_fasta), False)
+    if hit is not False:
+        return hit
+    import pyskani
+    db = pyskani.Database()
+    db.sketch("auth", *read_contigs(auth_fasta))
+    hits = db.query("sim", *read_contigs(sim_fasta))
+    # a self-consistent pair yields one hit; keep the best-aligned one otherwise
+    best = max(hits, key=lambda h: h.query_fraction, default=None)
+    out = None if best is None else (best.identity * 100.0,
+                                     best.query_fraction, best.reference_fraction)
+    cache[(auth_fasta, sim_fasta)] = out
+    return out
+
+
+def abundance_intensity(key, truth, samples, smax):
+    """The heatmap's colour intensity for one taxon, averaged over its samples.
+
+    `build_matrix` normalises each heatmap cell against the most abundant taxon
+    in *that* sample, so a cell's intensity reads as "how much of this sample is
+    this organism, relative to its biggest member". Averaging that same ratio
+    over the samples the taxon was simulated into carries the reading to a
+    scatter point, where there is one mark per taxon rather than one per cell.
+    """
+    abund = truth[key]["abund"]
+    return _mean([abund[s] / smax[s] for s in samples if s in abund]) or 0.0
+
+
+def sample_abundance_max(truth, samples, host_keys, include_host):
+    """Per-sample maximum ground-truth abundance: the intensity normaliser.
+
+    Matches the `smax` build_matrix computes for the heatmaps -- the host dwarfs
+    every microbe, so including it when it is not drawn would flatten the range.
+    """
+    smax = {}
+    for sample in samples:
+        vals = [info["abund"].get(sample, 0.0) for k, info in truth.items()
+                if include_host or k not in host_keys]
+        smax[sample] = max(vals, default=0.0) or 1.0
+    return smax
+
+
+def auth_reference_fasta(auth_dir, profiler, samples, key, scores):
+    """(ref_id, path) of the reference this taxon was authenticated against.
+
+    Breadth_Of_Coverage writes the top reference of each node next to it as
+    <ref_id>.fasta, so the exact sequence score.R judged the reads against is
+    already on disk. Nodes with no reads are dropped before that rule runs, so
+    the first sample that has the file wins.
+    """
+    for sample in samples:
+        rec = scores.get((sample, key))
+        if rec is None:
+            continue
+        node = os.path.join(auth_dir, profiler, sample, rec["taxid"])
+        name_list = os.path.join(node, "name_list.txt")
+        if not os.path.isfile(name_list):
+            continue
+        with open(name_list) as fh:
+            ref_id = fh.readline().strip()
+        path = os.path.join(node, f"{ref_id}.fasta")
+        if ref_id and os.path.isfile(path):
+            return ref_id, path
+    return None, None
+
+
+def taxon_mean_diff(key, samples, scores, truth, perfect, detected):
+    """(KrakenUniq-adjusted, full) mean |perfect - score| for one taxon.
+
+    Both run over every sample: samples where the taxon is absent contribute
+    their own deficit (0 for a correct rejection, the score itself for a false
+    positive), which is why the mean is not taken over the in-sample cells only.
+    That makes each value one taxon's contribution to the matching
+    auth_metrics.tsv column, scaled by the sample count -- summing over *all*
+    taxa would reproduce that metric, though auth_ani.tsv holds only the ones
+    with both a reference and a simulated genome and so will not add up to it.
+
+    The adjusted variant drops the cells where the taxon was simulated but
+    KrakenUniq never surfaced it -- the same rule diff_kraken_adjusted uses.
+    Those are misses of the screening step, which happens before any reference is
+    chosen, so counting them against reference divergence would be reading a
+    KrakenUniq result off an axis that knows nothing about KrakenUniq.
+    """
+    full = adjusted = 0
+    for sample in samples:
+        in_sample = is_present(truth, key, sample)
+        want = perfect[truth[key]["category"]] if in_sample else 0
+        rec = scores.get((sample, key))
+        d = abs(want - (rec["score"] if rec else 0))
+        full += d
+        if not (in_sample and key not in detected.get(sample, set())):
+            adjusted += d
+    n = len(samples)
+    if not n:
+        return float("nan"), float("nan")
+    return adjusted / n, full / n
+
+
+def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
+             host_keys, genomes_dir, perfect, include_host, tax, min_af):
+    """One row per (profiler, taxon) for every taxon KrakenUniq ever surfaced.
+
+    A taxon only earns a row when both ends of the comparison exist: the
+    authentication reference (so the profiler actually scored it somewhere) and
+    the simulated genome (so there is something to compare it against). A
+    KrakenUniq hit on a taxon the simulation never contained -- a false positive
+    -- has no simulated genome by definition and is reported as skipped rather
+    than plotted against an invented x.
+
+    `plotted` marks the rows the scatter uses; the rest stay in the TSV with
+    their numbers intact. A row is held back when
+
+      * the taxon is modern in the sample. score.R is an ancient-DNA score, so a
+        modern genome forfeits both damage criteria, the PMD criterion and (the
+        modern gargammel pass drawing longer fragments) the read-length one --
+        four of ten points, none of which the reference can influence. Its
+        deficit measures the damage model, and reading it off a divergence axis
+        would be reading an answer to a different question.
+      * skani aligned less than `min_af` of either genome, because the top
+        reference is not always a whole genome: MALT picks e.g. the 1.1 kb
+        KJ477415.1 for Lactococcus lactis, over which skani reports a perfectly
+        true and perfectly meaningless 100% ANI.
+      * skani found no hit at all.
+    """
+    universe = set()
+    for keys in detected.values():
+        universe |= keys
+    if not include_host:
+        universe -= host_keys
+
+    rows, skipped, cache = [], {}, {}
+    smax = sample_abundance_max(truth, samples, host_keys, include_host)
+    for key in sorted(universe, key=lambda k: (truth.get(k, {}).get("display")
+                                               or tax.name(k) or k).lower()):
+        info = truth.get(key)
+        if info is None:
+            skipped.setdefault("not simulated (false positive)", []).append(key)
+            continue
+        sim_fasta = os.path.join(genomes_dir, f"{info['genome']}.fa")
+        if not os.path.isfile(sim_fasta):
+            skipped.setdefault(f"no genome under {genomes_dir}", []).append(key)
+            continue
+        for profiler in profilers:
+            scores = scores_by_profiler[profiler]
+            ref_id, auth_fasta = auth_reference_fasta(
+                auth_dir, profiler, samples, key, scores)
+            if auth_fasta is None:
+                skipped.setdefault("never authenticated (no top reference)",
+                                   []).append(key)
+                continue
+            ani = skani_ani(auth_fasta, sim_fasta, cache)
+            adjusted, full = taxon_mean_diff(key, samples, scores, truth,
+                                             perfect, detected)
+            if info["category"] != "ancient":
+                reason = ("modern in the sample: four criteria are unreachable "
+                          "without deamination, so its deficit is set by the "
+                          "damage model rather than by the reference")
+            elif ani is None:
+                reason = "no skani hit (too divergent to align)"
+            elif min(ani[1], ani[2]) < min_af:
+                reason = (f"skani aligned < {min_af:.0%} of a genome (top "
+                          "reference is not a whole genome)")
+            else:
+                reason = None
+            if reason:
+                skipped.setdefault(reason, []).append(key)
+            rows.append({
+                "profiler": profiler,
+                "taxid": key,
+                "taxon": info["display"],
+                "category": info["category"],
+                "auth_ref": ref_id,
+                "sim_genome": os.path.basename(sim_fasta),
+                "ani": float("nan") if ani is None else ani[0],
+                "aligned_frac_sim": float("nan") if ani is None else ani[1],
+                "aligned_frac_auth": float("nan") if ani is None else ani[2],
+                "mean_diff_kraken_adjusted": adjusted,
+                "mean_diff_full": full,
+                "mean_truth_frac": _mean([info["abund"][s] for s in samples
+                                          if s in info["abund"]]),
+                "abund_intensity": abundance_intensity(key, truth, samples, smax),
+                "samples_present": sum(is_present(truth, key, s) for s in samples),
+                "samples_scored": sum((s, key) in scores for s in samples),
+                "plotted": "no" if reason else "yes",
+            })
+    return rows, skipped
+
+
+# An identical pair has no logarithm, so the divergence axis needs a floor. skani
+# resolves differences well below this, so a point sitting on it really is "the
+# same sequence" rather than a value that was rounded away.
+DIVERGENCE_FLOOR = 1e-6
+LABEL_FONTSIZE = 8
+
+
+def divergence(row):
+    """1 - ANI as a fraction: 99.9% ANI -> 1e-3. Floored so it can be logged."""
+    return max(1.0 - row["ani"] / 100.0, DIVERGENCE_FLOOR)
+
+
+def abbreviate_binomial(name):
+    """'Sorangium cellulosum' -> 'S. cellulosum'; anything else is left alone."""
+    parts = name.split()
+    if len(parts) >= 2 and len(parts[0]) > 1:
+        return f"{parts[0][0]}. " + " ".join(parts[1:])
+    return name
+
+
+def point_label(row):
+    """'56 S. cellulosum': the taxid to join against the tables, the abbreviated
+    binomial to read the plot without them."""
+    return f"{row['taxid']} {abbreviate_binomial(row['taxon'])}".strip()
+
+
+# A label further than this from its point (in points) gets a leader line: close
+# enough and the pairing is obvious, far enough and it has to be drawn.
+LEADER_THRESHOLD_PT = 12
+
+
+def place_labels(ax, fig, groups, anchor_of, points, label_of):
+    """Annotate each taxon once, greedily avoiding overlaps between labels.
+
+    The points cluster hard, so a fixed offset would stack labels on top of each
+    other. Each label tries offsets around its anchor in order of increasing
+    displacement and takes the first whose (approximate) box misses everything
+    placed so far; labels on the right of the axis try their left-hand offsets
+    first so they stay inside. Anything that ends up displaced gets a leader line
+    back to its point, which is what keeps the pairing readable once the placer
+    has had to push a label past its neighbours.
+    """
+    fig.canvas.draw()                       # transData is only valid once drawn
+    px_per_pt = fig.dpi / 72.0
+    (x0_ax, y0_ax), (x1_ax, y1_ax) = ax.transAxes.transform([(0, 0), (1, 1)])
+
+    # seed the occupied boxes with the markers themselves, so a label steps
+    # around points as well as around other labels -- a name lying across a
+    # marker is exactly the ambiguity the leader lines exist to prevent
+    r = 5.5 * px_per_pt
+    placed = []
+    for x, y in points:
+        mx, my = ax.transData.transform((x, y))
+        placed.append((mx - r, my - r, mx + r, my + r))
+
+    def overlaps(a, b):
+        return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+    # tallest first: the outliers are the labels most worth keeping legible
+    for _taxid, group in sorted(groups.items(),
+                                key=lambda kv: -max(r[Y_METRIC]
+                                                    for r in kv[1])):
+        anchor = anchor_of(group)
+        label = label_of(anchor)
+        px, py = ax.transData.transform((divergence(anchor),
+                                         anchor[Y_METRIC]))
+        w = 0.62 * LABEL_FONTSIZE * len(label) * px_per_pt
+        h = 1.4 * LABEL_FONTSIZE * px_per_pt
+        right_half = px > (x0_ax + x1_ax) / 2
+        sides = ["right", "left"] if right_half else ["left", "right"]
+        # nearest offsets first, so a label only travels as far as it must
+        offsets = sorted(((dxm, dy) for dxm in (8, 22, 38)
+                          for dy in (0, -12, 12, -24, 24, -36, 36)),
+                         key=lambda o: math.hypot(*o))
+        candidates = [(dxm if s == "left" else -dxm, dy, s)
+                      for dxm, dy in offsets for s in sides]
+        chosen = fallback = None
+        for dx, dy, side in candidates:
+            left = px + dx * px_per_pt - (w if side == "right" else 0)
+            cy = py + dy * px_per_pt
+            box = (left, cy - h / 2, left + w, cy + h / 2)
+            # a label that runs off the axes is worse than one that overlaps
+            if not (x0_ax <= box[0] and box[2] <= x1_ax
+                    and y0_ax <= box[1] and box[3] <= y1_ax):
+                continue
+            if fallback is None:
+                fallback = (dx, dy, side, box)
+            if not any(overlaps(box, b) for b in placed):
+                chosen = (dx, dy, side, box)
+                break
+        # every offset collided (or none fit): keep it in the axes and let it
+        # overlap rather than dropping the label or letting it escape
+        dx, dy, side, box = chosen or fallback or (8, 0, "left", None)
+        if box is not None:
+            placed.append(box)
+        # a darkened marker colour, so the label also says which point is its own
+        base = CAT_COLOR.get(anchor["category"], (0.25, 0.25, 0.25))
+        ink = tuple(c * 0.62 for c in base)
+        leader = None
+        if math.hypot(dx, dy) > LEADER_THRESHOLD_PT:
+            # leave from the label edge that faces the point, not its centre
+            leader = dict(arrowstyle="-", linewidth=0.5, color=ink + (0.65,),
+                          shrinkA=0, shrinkB=4,
+                          relpos=(0.0 if side == "left" else 1.0, 0.5))
+        ax.annotate(label, (divergence(anchor), anchor[Y_METRIC]),
+                    textcoords="offset points", xytext=(dx, dy),
+                    ha=side, va="center", fontsize=LABEL_FONTSIZE,
+                    color=ink, zorder=4, arrowprops=leader)
+
+
+def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples):
+    """Score deficit (y) against reference divergence (x), one shape per profiler.
+
+    ANI piles up between 98% and 100%, where a linear axis is unreadable, so x is
+    the divergence 1 - ANI on a log scale -- each decade is a tenfold difference
+    in how far the authentication reference sits from the genome the reads
+    actually came from. A top axis carries the equivalent ANI. The two profilers'
+    points for one taxon are joined by a thin line, so a taxon they disagree
+    about (which is about the profiler) is distinguishable at a glance from one
+    they agree on (which is about the reference).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    plotted = [r for r in rows if r["plotted"] == "yes"]
+    if not plotted:
+        print("  no taxon has both an authentication reference and a simulated "
+              "genome with a usable skani hit, skipping the ANI scatter")
+        return
+
+    markers = ["o", "s", "^", "D", "v"]
+    shape = {p: markers[i % len(markers)] for i, p in enumerate(profilers)}
+    fig, ax = plt.subplots(figsize=(9.5, 6.0))
+
+    # keyed by taxid, not display name: the connector has to join the profilers'
+    # views of one node, and two taxids can carry the same binomial. Labels are
+    # "<taxid> <abbreviated binomial>" -- the taxid to join against auth_ani.tsv
+    # and the heatmaps, the abbreviated name so the figure reads on its own
+    # without a full binomial's width crowding the dense band.
+    groups = {}
+    for row in plotted:
+        groups.setdefault(row["taxid"], []).append(row)
+
+    for group in groups.values():
+        if len(group) > 1:
+            pair = sorted(group, key=divergence)
+            ax.plot([divergence(r) for r in pair], [r[Y_METRIC] for r in pair],
+                    color="0.72", linewidth=0.8, zorder=2)
+    for row in plotted:
+        base = CAT_COLOR.get(row["category"], (0.4, 0.4, 0.4))
+        # same white -> category-colour ramp the heatmap cells use, so a pale
+        # point here and a pale cell there mean the same thing. The edge is the
+        # saturated colour rather than white: at low abundance the fill is nearly
+        # background, and a white edge would leave nothing to see.
+        ax.scatter(divergence(row), row[Y_METRIC],
+                   marker=shape[row["profiler"]], s=58,
+                   facecolor=blend(base, row["abund_intensity"]),
+                   edgecolor=tuple(c * 0.62 for c in base),
+                   linewidth=0.9, zorder=3)
+
+    ax.set_xscale("log")
+    xs = [divergence(r) for r in plotted]
+    lo, hi = min(xs) / 2.5, max(xs) * 2.5
+    ax.set_xlim(lo, hi)
+    # Decade ticks carrying both readings: a secondary axis would inherit the log
+    # locator and place its ANI ticks on the transformed values, which is nonsense.
+    decades = [10.0 ** e for e in range(math.floor(math.log10(lo)),
+                                        math.ceil(math.log10(hi)) + 1)]
+    decades = [d for d in decades if lo <= d <= hi]
+    ax.set_xticks(decades)
+    ax.set_xticklabels([f"$10^{{{round(math.log10(d))}}}$\n{100 * (1 - d):g}% ANI"
+                        for d in decades], fontsize=8)
+    ax.set_xlabel("divergence 1 − ANI between the authentication reference and "
+                  "the simulated genome (log scale)")
+    ax.set_ylabel("mean KrakenUniq-adjusted |perfect − score| over "
+                  f"{n_samples} {'sample' if n_samples == 1 else 'samples'}")
+    ax.set_title("Authentication score deficit vs reference divergence "
+                 "(ancient genomes)", fontsize=11)
+    ax.grid(True, which="both", linewidth=0.4, color="0.88", zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+    def swatch(face, edge, marker="o"):
+        return Line2D([], [], linestyle="", marker=marker, markersize=7,
+                      markerfacecolor=face, markeredgecolor=edge,
+                      markeredgewidth=0.9, color="none")
+
+    prof = [Line2D([], [], linestyle="", marker=shape[p], color="0.35",
+                   markersize=7, label=p) for p in profilers]
+    ax.add_artist(ax.legend(handles=prof, title="profiler", fontsize=8,
+                            title_fontsize=8, frameon=False, loc="upper left"))
+
+    # Anchor the ramp on real points rather than on 0/0.5/1: the taxa here occupy
+    # a middle band of the scale (no organism is its sample's largest in every
+    # sample, so averaging pulls everything inward), and a legend spanning the
+    # full ramp would advertise a contrast the figure does not contain. Labelling
+    # the swatches with the abundance they stand for makes it quantitative.
+    ranked = sorted(plotted, key=lambda r: r["abund_intensity"])
+    picks, seen = [], set()
+    for row in (ranked[0], ranked[len(ranked) // 2], ranked[-1]):
+        if row["taxid"] not in seen:
+            seen.add(row["taxid"])
+            picks.append(row)
+    ramp, labels = [], []
+    for row in picks:
+        base = CAT_COLOR.get(row["category"], (0.4, 0.4, 0.4))
+        ramp.append(swatch(blend(base, row["abund_intensity"]),
+                           tuple(c * 0.62 for c in base)))
+        labels.append(f"{row['mean_truth_frac'] * 100:.1f}% of a sample")
+    ax.legend(handles=ramp, labels=labels, fontsize=8, title_fontsize=8,
+              title="mean ground-truth abundance",
+              frameon=False, loc="center left", handletextpad=0.6,
+              labelspacing=0.35)
+
+    # labels last: they need the final axis limits to know where the edges are
+    place_labels(ax, fig, groups,
+                 lambda g: max(g, key=lambda r: r[Y_METRIC]),
+                 [(divergence(r), r[Y_METRIC]) for r in plotted],
+                 point_label)
+
+    fig.savefig(out_pdf, bbox_inches="tight")
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  ANI scatter ({len(plotted)} point(s)) -> {out_pdf}")
+
+
+# --------------------------------------------------------------------------- #
 # Plotting
 # --------------------------------------------------------------------------- #
 CAT_COLOR = {
@@ -813,10 +1296,27 @@ def parse_args(argv=None):
                     help="comma-separated profilers (default: all under AUTHENTICATION/)")
     ap.add_argument("--ancient-score", type=float, default=10,
                     help="perfect score for an ancient genome (default 10)")
-    ap.add_argument("--modern-score", type=float, default=6,
-                    help="perfect score for a modern genome (default 6, the "
-                         "empirical ceiling; use 5 for the on-merit value that "
-                         "excludes the spuriously-earned ancient edit-distance point)")
+    ap.add_argument("--modern-score", type=float, default=5,
+                    help="perfect score for a modern genome (default 5, what one "
+                         "can earn on merit: without deamination the two damage "
+                         "criteria, the PMD criterion and -- because gargammel's "
+                         "modern pass draws longer fragments -- the read-length "
+                         "criterion are all unreachable. Use 6 for the empirical "
+                         "ceiling, whose sixth point is the ancient edit-distance "
+                         "criterion passing by chance on a handful of reads)")
+    ap.add_argument("--genomes", default=DEFAULT_GENOMES,
+                    help="directory of the FASTAs the simulation drew from, "
+                         "named <taxon>.fa after the truth.tsv taxon column. "
+                         "Used as the ANI scatter's reference point. "
+                         f"Default: {DEFAULT_GENOMES}")
+    ap.add_argument("--no-ani", action="store_true",
+                    help="skip the skani ANI comparison and its scatter plot")
+    ap.add_argument("--min-aligned-frac", type=float, default=0.15,
+                    help="minimum fraction of both genomes skani must align for "
+                         "an ANI to reach the scatter (default 0.15); below it "
+                         "the top reference is a fragment rather than a genome "
+                         "and its ANI says nothing. Such rows stay in "
+                         "auth_ani.tsv marked plotted=no.")
     ap.add_argument("--no-cache", action="store_true",
                     help="always remeasure breadth of coverage instead of "
                          "reusing an auth_calls.tsv already in --outdir")
@@ -844,9 +1344,20 @@ def discover_targets(auth_dir, profilers_arg):
     return profilers, sorted(samples, key=natural)
 
 
+def perfect_scores(args):
+    """The score a flawless authentication earns, per ground-truth category.
+
+    Kept integral where possible: argparse applies type=float only to values it
+    actually parses, so otherwise the diff columns would switch between "56" and
+    "56.0" depending on whether --modern-score was passed.
+    """
+    perfect = {"ancient": args.ancient_score, "modern": args.modern_score}
+    return {k: int(v) if float(v).is_integer() else v for k, v in perfect.items()}
+
+
 def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
                        detected, tax, cache):
-    """Render one profiler's heatmap and return its (metric rows, call rows)."""
+    """Render one profiler's heatmap, returning (metric rows, call rows, scores)."""
     scores = load_profiler_scores(auth_dir, profiler, samples, tax)
     rows, label, smax = build_matrix(scores, truth, samples,
                                      args.include_host, host_keys, tax)
@@ -867,18 +1378,64 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
     for row in calls:
         row["breadth"] = fmt_breadth(breadths, row["sample"], row.pop("_key"))
 
-    # keep integral targets integral: argparse applies type=float only to values
-    # it actually parses, so otherwise the diff columns would switch between
-    # "56" and "56.0" depending on whether --modern-score was passed
-    perfect = {"ancient": args.ancient_score, "modern": args.modern_score}
-    perfect = {k: int(v) if float(v).is_integer() else v
-               for k, v in perfect.items()}
+    perfect = perfect_scores(args)
     per_sample = {
         s: sample_metrics(s, scores, truth, detected, perfect,
                           args.include_host, host_keys, breadths)
         for s in samples
     }
-    return metric_rows(profiler, samples, per_sample), calls
+    return metric_rows(profiler, samples, per_sample), calls, scores
+
+
+def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
+                  detected, host_keys, tax):
+    """Write auth_ani.tsv and the ANI-vs-score-deficit scatter.
+
+    Isolated from the rest of the run: pyskani is an extra dependency the other
+    outputs do not need, so a missing binding costs the scatter and nothing else.
+    """
+    if importlib.util.find_spec("pyskani") is None:
+        print("\nANI scatter skipped: pyskani is not installed in this "
+              "environment.\n  pip install pyskani   (or rerun with --no-ani "
+              "to stop asking)")
+        return
+
+    print(f"\nANI vs simulated genomes ({args.genomes}):")
+    if not os.path.isdir(args.genomes):
+        print(f"  no such directory, skipping -- pass --genomes")
+        return
+
+    rows, skipped = ani_rows(
+        profilers, scores_by_profiler, auth_dir, samples, truth, detected,
+        host_keys, args.genomes, perfect_scores(args), args.include_host, tax,
+        args.min_aligned_frac)
+
+    for reason, keys in sorted(skipped.items()):
+        names = sorted({truth.get(k, {}).get("display") or tax.name(k) or k
+                        for k in keys})
+        print(f"  {len(names)} taxon(s) not plotted, {reason}: "
+              + ", ".join(names[:6]) + (", ..." if len(names) > 6 else ""))
+
+    # a taxon plotted for only some profilers gets no connector; say so, rather
+    # than leaving a lone point looking like a rule about the x axis
+    seen = {}
+    for row in rows:
+        if row["plotted"] == "yes":
+            seen.setdefault(row["taxon"], []).append(row["profiler"])
+    lone = {t: ps for t, ps in seen.items() if len(ps) < len(profilers)}
+    if lone:
+        print(f"  {len(lone)} taxon(s) plotted for only some profilers, so they "
+              "carry no connector (the other row is listed above): "
+              + ", ".join(f"{t} ({'+'.join(ps)} only)"
+                          for t, ps in sorted(lone.items())))
+
+    out_tsv = os.path.join(args.outdir, "auth_ani.tsv")
+    write_tsv(out_tsv, ANI_COLS, rows, ANI_PLACES)
+    print(f"  {len(rows)} row(s) -> {out_tsv}")
+    render_ani_scatter(rows, profilers,
+                       os.path.join(args.outdir, "auth_ani_scatter.pdf"),
+                       os.path.join(args.outdir, "auth_ani_scatter.png"),
+                       len(samples))
 
 
 def main(argv=None):
@@ -897,12 +1454,17 @@ def main(argv=None):
     out_calls = os.path.join(args.outdir, "auth_calls.tsv")
     cache = {} if args.no_cache else load_call_cache(out_calls)
 
-    metrics, calls = [], []
+    metrics, calls, scores_by_profiler = [], [], {}
     for profiler in profilers:
-        m, c = summarise_profiler(profiler, args, auth_dir, samples, truth,
-                                  host_keys, detected, tax, cache)
+        m, c, s = summarise_profiler(profiler, args, auth_dir, samples, truth,
+                                     host_keys, detected, tax, cache)
         metrics += m
         calls += c
+        scores_by_profiler[profiler] = s
+
+    if not args.no_ani:
+        summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples,
+                      truth, detected, host_keys, tax)
 
     report_unresolved(tax)
 
