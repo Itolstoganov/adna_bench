@@ -695,6 +695,93 @@ def call_rows(profiler, samples, profiler_scores, truth, detected, label,
 
 
 # --------------------------------------------------------------------------- #
+# Jaccard between the true ancient set and what a score threshold predicts
+# --------------------------------------------------------------------------- #
+def ancient_truth_set(sample, truth, host_keys, include_host):
+    """The genomes simulated into `sample` as ancient."""
+    return {k for k, info in truth.items()
+            if info["category"] == "ancient" and sample in info["abund"]
+            and (include_host or k not in host_keys)}
+
+
+def jaccard_at_threshold(sample, scores, truth, host_keys, include_host, cut,
+                         surfaced):
+    """Jaccard of {scored >= cut} against the sample's true ancient set.
+
+    The prediction is the raw score cut, with no appeal to ground truth -- unlike
+    auth_metrics' jaccard_ancient, which intersects the found set with the ancient
+    taxa before comparing and so cannot see a false positive that is a real but
+    modern organism. Here every taxon clearing the cut counts as a claim that it
+    is an ancient genome, which is what a score threshold actually asserts.
+
+    Both sides are restricted to what KrakenUniq surfaced in this sample, the
+    same adjustment diff_kraken_adjusted makes. It cuts in both directions: a
+    node the profiler only holds because an earlier run's screen left its
+    directory behind stops counting as a prediction, and a genome KrakenUniq
+    never offered stops counting as a miss. What is left measures the
+    authentication step rather than the screening step in front of it.
+    """
+    predicted = {k for (s, k), rec in scores.items()
+                 if s == sample and rec["score"] >= cut and k in surfaced
+                 and (include_host or k not in host_keys)}
+    actual = ancient_truth_set(sample, truth, host_keys, include_host) & surfaced
+    return _jaccard(predicted, actual)
+
+
+def jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
+                           host_keys, include_host, cuts, detected):
+    """One row per threshold, each profiler's mean-over-samples Jaccard."""
+    rows = []
+    for cut in cuts:
+        row = {"threshold": cut}
+        for p in profilers:
+            row[p] = _mean([
+                jaccard_at_threshold(s, scores_by_profiler[p], truth, host_keys,
+                                     include_host, cut, detected.get(s, set()))
+                for s in samples])
+        rows.append(row)
+    return rows
+
+
+def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples):
+    """Mean Jaccard against score threshold, one line per profiler."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.0))
+    cmap = plt.get_cmap("tab10")
+    markers = ["o", "s", "^", "D", "v"]
+
+    for i, p in enumerate(profilers):
+        xs = [r["threshold"] for r in rows]
+        ys = [r[p] for r in rows]
+        ax.plot(xs, ys, marker=markers[i % len(markers)], markersize=5,
+                linewidth=1.6, color=cmap(i), label=p, zorder=3)
+
+    ax.set_xticks([r["threshold"] for r in rows])
+    ax.set_xlabel("authentication score threshold t  (predicted ancient = score ≥ t)")
+    ax.set_ylabel(f"mean Jaccard over {n_samples} "
+                  f"{'sample' if n_samples == 1 else 'samples'}")
+    ax.set_title("Recovery of the true ancient genome set vs score threshold\n"
+                 "(KrakenUniq-adjusted)",
+                 fontsize=11)
+    ax.set_ylim(0, max(1.0, max((r[p] for r in rows for p in profilers
+                                 if r[p] == r[p]), default=0) * 1.15))
+    ax.grid(True, linewidth=0.4, color="0.88", zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.legend(fontsize=9, frameon=False, loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_pdf, bbox_inches="tight")
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Jaccard-vs-threshold curve -> {out_pdf}")
+
+
+# --------------------------------------------------------------------------- #
 # score.R's criteria, per node
 # --------------------------------------------------------------------------- #
 # The ten points score.R awards, and what ground truth says each should do. It is
@@ -785,7 +872,7 @@ def node_criteria(folder, rma6, evenness):
 
 
 def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
-                    host_keys, include_host, detected):
+                    host_keys, include_host, detected, keep):
     """Per-criterion (FP, FN, expected-pass, expected-fail, skipped) for a profiler.
 
     Every node the profiler scored is a trial. Its ground-truth category fixes
@@ -818,6 +905,8 @@ def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
             continue
         category = (truth[key]["category"] if is_present(truth, key, sample)
                     else "absent")
+        if not keep(key, category):
+            continue
         expected = CRITERIA_EXPECTED[category]
         if rec["score"] > 0:
             cov = coverage.get((sample, key))
@@ -835,12 +924,12 @@ def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
 
 
 def criteria_rows(profilers, auth_dir, samples, scores_by_profiler, truth,
-                  coverage_by_profiler, host_keys, include_host, detected):
+                  coverage_by_profiler, host_keys, include_host, detected, keep):
     """(rows, skipped): one row per criterion, each profiler's FP/FN side by side."""
     per_profiler = {
         p: criteria_counts(p, auth_dir, samples, scores_by_profiler[p], truth,
                            coverage_by_profiler[p], host_keys, include_host,
-                           detected)
+                           detected, keep)
         for p in profilers
     }
     rows = []
@@ -863,13 +952,37 @@ FP_COLOR = CAT_COLOR["absent"]
 FN_COLOR = (0.90, 0.55, 0.10)
 
 
+# The criteria tables rendered on every run: (filename suffix, title suffix, the
+# ground-truth categories judged).
+#
+# The "ancient" view drops modern genomes but keeps the absent ones. Restricting
+# to ancient *nodes* alone would produce a dead table: ancient expects all nine
+# criteria to fire, so "fired when it should not have" cannot happen and the whole
+# FP column would be structurally 0. Absent nodes are what make false positives
+# observable, so they stay; dropping only the modern genomes is what makes this
+# the ancient-DNA view, and it is the same reasoning that keeps modern taxa off
+# the ANI scatter.
+CRITERIA_VIEWS = (
+    ("", "", ("ancient", "modern", "absent")),
+    ("ancient", " (ancient genomes)", ("ancient", "absent")),
+)
+
+
+def criteria_filter(categories, taxids):
+    """A keep(key, category) predicate for one criteria view."""
+    def keep(key, category):
+        return category in categories and (not taxids or key in taxids)
+    return keep
+
+
 def expected_label(index):
     """Which ground-truth categories should fire criterion `index`."""
     _name, _pts, ancient, modern = CRITERIA[index]
     return "ancient + modern" if ancient and modern else "ancient only"
 
 
-def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped):
+def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
+                          title_suffix=""):
     """Draw the FP/FN table as a figure, cells shaded by count."""
     import matplotlib
     matplotlib.use("Agg")
@@ -944,7 +1057,7 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped):
         cell(4 + 2 * i, r, str(sum(x[f"{p}_FN"] for x in rows)), face=header,
              weight="bold")
 
-    ax.set_title("Authentication criteria results",
+    ax.set_title("Authentication criteria results" + title_suffix,
                  fontsize=11, pad=12)
     note = ("FP = criterion fired where ground truth says it should not; "
             "FN = vice versa")
@@ -1658,6 +1771,12 @@ def parse_args(argv=None):
                          "named <taxon>.fa after the truth.tsv taxon column. "
                          "Used as the ANI scatter's reference point. "
                          f"Default: {DEFAULT_GENOMES}")
+    ap.add_argument("--criteria-taxids", default="",
+                    help="comma-separated species taxids to restrict the "
+                         "criteria tables to (default: every judged node). The "
+                         "taxid is the species-level join key, i.e. the row "
+                         "label on the ANI scatter and the `taxid` column of "
+                         "auth_ani.tsv.")
     ap.add_argument("--no-ani", action="store_true",
                     help="skip the skani ANI comparison and its scatter plot")
     ap.add_argument("--min-aligned-frac", type=float, default=0.15,
@@ -1740,6 +1859,63 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
     return metric_rows(profiler, samples, per_sample), calls, scores, coverage
 
 
+def summarise_jaccard(args, profilers, scores_by_profiler, samples, truth,
+                      host_keys, detected):
+    """Write and draw the Jaccard-vs-score-threshold curve."""
+    # Thresholds start at 1 and run to the perfect ancient score. ">= 0" would
+    # predict every node the profiler screened, including the ones it explicitly
+    # scored 0 and rejected, which is not a threshold anyone would set; ">= 10"
+    # is the other end, "only a perfect score counts".
+    cuts = list(range(1, int(args.ancient_score) + 1))
+    rows = jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
+                                  host_keys, args.include_host, cuts, detected)
+    out_tsv = os.path.join(args.outdir, "auth_jaccard_threshold.tsv")
+    write_tsv(out_tsv, ["threshold"] + list(profilers), rows,
+              {p: 4 for p in profilers})
+    print(f"\nJaccard vs score threshold -> {out_tsv}")
+    render_jaccard_curve(
+        rows, profilers,
+        os.path.join(args.outdir, "auth_jaccard_threshold.pdf"),
+        os.path.join(args.outdir, "auth_jaccard_threshold.png"), len(samples))
+    print_tsv(["threshold"] + list(profilers), rows, {p: 4 for p in profilers})
+
+
+def summarise_criteria(args, profilers, auth_dir, samples, scores_by_profiler,
+                       truth, coverage_by_profiler, host_keys, detected):
+    """Write and draw every CRITERIA_VIEWS table, honouring --criteria-taxids."""
+    taxids = {t.strip() for t in args.criteria_taxids.split(",") if t.strip()}
+    if taxids:
+        print(f"\nCriteria tables restricted to {len(taxids)} taxid(s): "
+              + ", ".join(sorted(taxids)))
+    cols = ["criterion", "points"] + [
+        f"{p}_{suffix}" for p in profilers
+        for suffix in ("FP", "FN", "expected_pass", "expected_fail")]
+
+    for slug, title_suffix, categories in CRITERIA_VIEWS:
+        rows, skipped = criteria_rows(
+            profilers, auth_dir, samples, scores_by_profiler, truth,
+            coverage_by_profiler, host_keys, args.include_host, detected,
+            criteria_filter(categories, taxids))
+        judged = {p: rows[0][f"{p}_expected_pass"] + rows[0][f"{p}_expected_fail"]
+                  for p in profilers}
+        if not any(judged.values()):
+            print(f"\nCriteria table{title_suffix or ' (all genomes)'}: "
+                  "no node matched the filter, skipping")
+            continue
+
+        # <name>.<variant>.<ext>, the same shape as auth_summary_heatmap.malt.pdf
+        tag = f".{slug}" if slug else ""
+        out_tsv = os.path.join(args.outdir, f"auth_criteria{tag}.tsv")
+        write_tsv(out_tsv, cols, rows)
+        print(f"\nPer-criterion FP/FN{title_suffix} -> {out_tsv}")
+        render_criteria_table(
+            rows, profilers,
+            os.path.join(args.outdir, f"auth_criteria_table{tag}.pdf"),
+            os.path.join(args.outdir, f"auth_criteria_table{tag}.png"),
+            judged, skipped, title_suffix)
+        print_criteria_table(rows, profilers, judged, skipped)
+
+
 def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
                   detected, host_keys, tax):
     """Write auth_ani.tsv and the ANI-vs-score-deficit scatter.
@@ -1817,22 +1993,10 @@ def main(argv=None):
         scores_by_profiler[profiler] = s
         coverage_by_profiler[profiler] = cov
 
-    crit_rows, crit_skipped = criteria_rows(
-        profilers, auth_dir, samples, scores_by_profiler, truth,
-        coverage_by_profiler, host_keys, args.include_host, detected)
-    crit_cols = ["criterion", "points"] + [
-        f"{p}_{suffix}" for p in profilers
-        for suffix in ("FP", "FN", "expected_pass", "expected_fail")]
-    out_crit = os.path.join(args.outdir, "auth_criteria.tsv")
-    write_tsv(out_crit, crit_cols, crit_rows)
-    print(f"\nPer-criterion FP/FN -> {out_crit}")
-    judged = {p: crit_rows[0][f"{p}_expected_pass"]
-                 + crit_rows[0][f"{p}_expected_fail"] for p in profilers}
-    render_criteria_table(crit_rows, profilers,
-                          os.path.join(args.outdir, "auth_criteria_table.pdf"),
-                          os.path.join(args.outdir, "auth_criteria_table.png"),
-                          judged, crit_skipped)
-    print_criteria_table(crit_rows, profilers, judged, crit_skipped)
+    summarise_criteria(args, profilers, auth_dir, samples, scores_by_profiler,
+                       truth, coverage_by_profiler, host_keys, detected)
+    summarise_jaccard(args, profilers, scores_by_profiler, samples, truth,
+                      host_keys, detected)
 
     if not args.no_ani:
         summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples,
