@@ -27,7 +27,19 @@ produces, for every profiler:
      reference database rather than of the profiler: several score.R criteria
      (edit distance, ANI, evenness) compare reads to the *top reference*, which
      is only the simulated genome when that genome is in the aMeta reference DB.
-  4. `auth_calls.tsv`: one row per (profiler, sample, taxon) with read support,
+  4. `auth_accession_conflicts.tsv`: reference sequences the two profilers
+     assign to different taxa, with the false-positive reads each put on them.
+     malt-build labels a reference by parsing taxon names out of its FASTA
+     description (`-tn/--parseTaxonNames`, default true) as well as looking the
+     accession up, and takes the LCA of every name it matches; ngsLCA only looks
+     the accession up. A description that names a second organism -- a homolog
+     it is "similar to", a cloning host, a lab in a clone name -- therefore
+     pulls MALT to a different node, often a coarser rank, so the same reference
+     can drive a species-level false positive for one profiler and a
+     genus-level (unscored, invisible) call for the other. That makes the two
+     profilers' false-positive taxon counts non-comparable at face value, and
+     this table is the correction term.
+  5. `auth_calls.tsv`: one row per (profiler, sample, taxon) with read support,
      score, breadth of coverage and a TP/FP/FN verdict -- the per-cell backing
      for both of the above. It doubles as a cache: breadth is the one column that
      costs a full pass over a `samtools depth -a` file per node, so on a rerun an
@@ -53,8 +65,11 @@ false negative.
 """
 
 import argparse
+import collections
 import csv
+import gzip
 import importlib.util
+import shutil
 import math
 import os
 import re
@@ -122,6 +137,170 @@ def luminance(rgb):
 # authentication references against.
 DEFAULT_GENOMES = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "genomes")
+
+
+# --------------------------------------------------------------------------- #
+# Accession-level taxonomy conflicts between profilers
+# --------------------------------------------------------------------------- #
+def taxon_label(taxid, tax):
+    """'Nonomuraea [genus] (83681)'.
+
+    Rank is part of the label on purpose: the two sides routinely disagree
+    about *rank* rather than about lineage, and a bare name hides that.
+    """
+    if not taxid:
+        return ""
+    return f"{tax.name(taxid) or '?'} [{tax.rank.get(taxid, 'no rank')}] ({taxid})"
+
+
+def auth_bam_accessions(bam):
+    """({accession: distinct reads}, {accession: taxid}) for one sorted.bam.
+
+    Authentication BAMs name their references two ways, and the difference is
+    the whole point of this table: MALT writes `<accession>|tax|<taxid>`, which
+    is *its own DB's* label for that sequence, while the aligner+ngsLCA path
+    writes a bare accession and leaves labelling to ngsLCA's -acc2tax. So one
+    profiler's assignment arrives with the reads and the other has to be looked
+    up (load_acc2taxid).
+    """
+    reads, label = {}, {}
+    if not os.path.isfile(bam):
+        return {}, label
+    proc = subprocess.Popen(["samtools", "view", bam], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True)
+    with proc:
+        for line in proc.stdout:
+            f = line.split("\t", 3)
+            if len(f) < 3 or f[2] == "*":
+                continue
+            acc, _, tagged = f[2].partition("|tax|")
+            if tagged:
+                label[acc] = tagged.split("|")[0]
+            reads.setdefault(acc, set()).add(f[0])
+    return {a: len(r) for a, r in reads.items()}, label
+
+
+def accession_fp_reads(auth_dir, profiler, calls, scores):
+    """({accession: false-positive reads}, {accession: this profiler's taxid}).
+
+    Only nodes this profiler called FP are counted: a node's read_list/sorted.bam
+    under AUTHENTICATION is exactly the read support behind its score, so this
+    breaks the read support of the *wrong* calls down by the reference sequence
+    that attracted them.
+    """
+    reads, label = collections.Counter(), {}
+    for row in calls:
+        if row["profiler"] != profiler or row["verdict"] != "FP":
+            continue
+        rec = scores.get((row["sample"], row["_key"]))
+        if not rec:
+            continue
+        per_acc, tags = auth_bam_accessions(
+            os.path.join(auth_dir, profiler, row["sample"], rec["taxid"],
+                         "sorted.bam"))
+        for acc, n in per_acc.items():
+            reads[acc] += n
+        label.update(tags)
+    return reads, label
+
+
+def profiler_sam_path(results_dir, profiler, sample):
+    """The canonical SAM for a profiler+sample, mirroring aMeta's auth_alignment_sam."""
+    sub = "MALT" if profiler == "malt" else "ALIGNMENT"
+    return os.path.join(results_dir, sub, f"{sample}.trimmed.sam.gz")
+
+
+def sam_header_labels(path):
+    """({accession: taxid}, n_refs) from a SAM's @SQ block.
+
+    MALT stamps its own label into every reference name (`<acc>|tax|<taxid>`),
+    so its whole DB labelling is readable straight off the header -- which sits
+    entirely at the top of the file, ahead of the first alignment, so this reads
+    a few MB rather than the whole 200 MB SAM. A reference MALT could not label
+    at all carries no tag and is simply absent from the result. The aligner path
+    writes bare accessions and yields nothing here, which is how the caller
+    tells the two apart.
+    """
+    labels, refs = {}, 0
+    if not os.path.isfile(path):
+        return labels, refs
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as fh:
+        for line in fh:
+            if not line.startswith("@"):
+                break
+            if not line.startswith("@SQ"):
+                continue
+            refs += 1
+            for field in line.rstrip("\n").split("\t"):
+                if not field.startswith("SN:"):
+                    continue
+                acc, _, tagged = field[3:].partition("|tax|")
+                if tagged:
+                    labels[acc] = tagged.split("|")[0]
+    return labels, refs
+
+
+def load_acc2taxid(path, needed):
+    """{accession.version: taxid} restricted to `needed`, streamed.
+
+    Handles both layouts this pipeline keeps around: NCBI's
+    nucl_gb.accession2taxid (header row, accession.version in column 2) and the
+    two-column seqid2taxid map the reference FASTA is subset with. The first is
+    ~10 GB, hence the streaming and the early exit.
+    """
+    found = {}
+    if not path or not os.path.isfile(path) or not needed:
+        return found
+    with open(path) as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        wide = len(head) >= 3
+        if not head or head[0] != "accession":
+            fh.seek(0)
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if wide:
+                if len(f) < 3:
+                    continue
+                acc, taxid = f[1], f[2]
+            elif len(f) >= 2:
+                acc, taxid = f[0], f[1]
+            else:
+                continue
+            if acc in needed:
+                found[acc] = taxid
+                if len(found) == len(needed):
+                    break
+    return found
+
+
+def accession_conflict_cols(profilers):
+    a, b = profilers
+    return ["accession", f"{a}_assignment", f"{b}_assignment",
+            f"{a}_fp_reads", f"{b}_fp_reads"]
+
+
+def accession_conflict_rows(profilers, labels, reads, tax):
+    """One row per accession the two profilers label with different taxids."""
+    a, b = profilers
+    rows, unlabelled = [], 0
+    for acc in sorted(set(reads[a]) | set(reads[b])):
+        ta, tb = labels[a].get(acc), labels[b].get(acc)
+        if not ta or not tb:
+            unlabelled += 1
+            continue
+        if ta == tb:
+            continue
+        rows.append({
+            "accession": acc,
+            f"{a}_assignment": taxon_label(ta, tax),
+            f"{b}_assignment": taxon_label(tb, tax),
+            f"{a}_fp_reads": reads[a].get(acc, 0),
+            f"{b}_fp_reads": reads[b].get(acc, 0),
+        })
+    rows.sort(key=lambda r: (-(r[f"{a}_fp_reads"] + r[f"{b}_fp_reads"]),
+                             r["accession"]))
+    return rows, unlabelled
 
 
 # --------------------------------------------------------------------------- #
@@ -666,8 +845,9 @@ def call_rows(profiler, samples, profiler_scores, truth, detected, label,
               include_host, host_keys):
     """One row per (sample, taxon) that is either simulated or authenticated.
 
-    Rows carry the join key under "_key" for the caller to resolve breadth with;
-    it is not in CALL_COLS, so it never reaches the TSV.
+    Rows carry the join key under "_key" so callers can resolve breadth and a
+    node's AUTHENTICATION directory; it is not in CALL_COLS, so it never
+    reaches the TSV.
     """
     rows = []
     for sample in samples:
@@ -1785,6 +1965,19 @@ def parse_args(argv=None):
                          "the top reference is a fragment rather than a genome "
                          "and its ANI says nothing. Such rows stay in "
                          "auth_ani.tsv marked plotted=no.")
+    ap.add_argument("--acc2taxid", default="",
+                    help="accession -> taxid mapping used to label references "
+                         "for the profiler that does not tag its BAM RNAMEs "
+                         "(the aligner+ngsLCA path). Pass the file ngsLCA was "
+                         "run with -- the config's malt_accession2taxid -- for "
+                         "its exact labels, at the cost of streaming a ~10 GB "
+                         "file (minutes). Default: "
+                         "<results>/REFERENCE_DB/seqid2taxid.project.map, which "
+                         "is the same mapping for almost every accession, is "
+                         "read in seconds, but is not the file ngsLCA reads.")
+    ap.add_argument("--no-accession-conflicts", action="store_true",
+                    help="skip auth_accession_conflicts.tsv (it costs one "
+                         "samtools pass per false-positive node)")
     ap.add_argument("--no-cache", action="store_true",
                     help="always remeasure breadth of coverage instead of "
                          "reusing an auth_calls.tsv already in --outdir")
@@ -1846,7 +2039,10 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
     coverage = node_coverages(auth_dir, profiler, needed, scores, label,
                               cache_for_profiler(cache, profiler, calls))
     for row in calls:
-        key = row.pop("_key")
+        # kept on the row (render_row reads only the explicit columns, so it
+        # reaches neither the TSV nor the cache comparison) because later
+        # consumers need the node's taxid to find its AUTHENTICATION directory
+        key = row["_key"]
         for index, (name, _fmt) in enumerate(COVERAGE_COLS):
             row[name] = fmt_coverage(coverage, row["sample"], key, index)
 
@@ -1967,6 +2163,104 @@ def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
                        len(samples))
 
 
+def profiler_reference_labels(results_dir, profiler, samples):
+    """{accession: taxid} as *this profiler* labels its references, or {}.
+
+    Read from the @SQ block of the profiler's own SAM, not from the per-node
+    authentication BAMs: those hold only the one reference a node was
+    authenticated against, which would restrict the comparison to references
+    both profilers happened to pick as a top hit and so hide exactly the
+    disagreements that make one profiler call a species where the other calls a
+    genus. Returns {} for a profiler that writes bare accessions -- its
+    labelling lives in the acc2taxid file instead.
+    """
+    labels = {}
+    for i, sample in enumerate(samples):
+        found, refs = sam_header_labels(
+            profiler_sam_path(results_dir, profiler, sample))
+        labels.update(found)
+        # an untagged profiler stays untagged for every sample; stop after the
+        # first rather than re-reading a million-line header nine more times
+        if i == 0 and refs and not found:
+            break
+    return labels
+
+
+def summarise_accession_conflicts(args, profilers, auth_dir, calls,
+                                  scores_by_profiler, tax):
+    """Write auth_accession_conflicts.tsv: references the profilers label apart.
+
+    malt-build resolves each reference by *parsing taxon names out of the FASTA
+    description* (`-tn/--parseTaxonNames`, default true) alongside its -a2t
+    accession lookup, and takes the LCA of everything it matches; ngsLCA does a
+    plain accession -> taxid lookup and nothing else. Where a description names
+    a second organism -- a homolog it is "similar to", a cloning host, or a lab
+    in a clone name ("Cancer Center" -> the crab genus Cancer) -- the two land
+    on different nodes, usually at different ranks. The same reference then
+    feeds a species-level false positive on one side and a genus-level, and so
+    unscored and invisible, call on the other, which is why the profilers'
+    false-positive taxon counts are not comparable at face value.
+
+    Columns: the accession, what each profiler calls it, and the false-positive
+    reads each profiler actually put on it (0 meaning that profiler aligned
+    false-positive reads elsewhere, not that the reference went unused).
+    """
+    if len(profilers) != 2:
+        print(f"\nAccession conflicts skipped: needs exactly 2 profilers, "
+              f"got {len(profilers)} ({', '.join(profilers) or 'none'})")
+        return
+    if shutil.which("samtools") is None:
+        print("\nAccession conflicts skipped: samtools is not on PATH")
+        return
+
+    print("\nAccession-level taxonomy conflicts:")
+    samples = sorted({row["sample"] for row in calls})
+    reads, labels = {}, {}
+    for profiler in profilers:
+        reads[profiler], _tags = accession_fp_reads(
+            auth_dir, profiler, calls, scores_by_profiler[profiler])
+        labels[profiler] = profiler_reference_labels(
+            args.results, profiler, samples)
+        src = (f"{len(labels[profiler])} from its SAM @SQ tags"
+               if labels[profiler] else "untagged, needs acc2taxid")
+        print(f"  {profiler}: {len(reads[profiler])} reference(s) carrying "
+              f"false-positive reads; labels {src}")
+
+    universe = set(reads[profilers[0]]) | set(reads[profilers[1]])
+    untagged = [p for p in profilers if not labels[p]]
+    if untagged:
+        path = args.acc2taxid or os.path.join(
+            args.results, "REFERENCE_DB", "seqid2taxid.project.map")
+        found = load_acc2taxid(path, universe)
+        print(f"  acc2taxid: {len(found)}/{len(universe)} accession(s) resolved "
+              f"from {path}")
+        if not args.acc2taxid:
+            print("    (that is the reference-subset map, not the file ngsLCA "
+                  "reads -- pass --acc2taxid <config's malt_accession2taxid> "
+                  "for its exact labels)")
+        for profiler in untagged:
+            labels[profiler] = found
+
+    rows, unlabelled = accession_conflict_rows(profilers, labels, reads, tax)
+    cols = accession_conflict_cols(profilers)
+    out = os.path.join(args.outdir, "auth_accession_conflicts.tsv")
+    write_tsv(out, cols, rows)
+    print(f"  {len(rows)} conflicting reference(s) of {len(universe)} carrying "
+          f"false-positive reads -> {out}")
+    if unlabelled:
+        print(f"  {unlabelled} reference(s) not compared: only one side had a "
+              "label (MALT leaves a reference untagged when it can resolve no "
+              "name for it)")
+    if rows:
+        a, b = profilers
+        print("  top conflicts by false-positive read support:")
+        for row in rows[:8]:
+            print(f"    {row['accession']:<16} "
+                  f"{a}={row[f'{a}_assignment']} [{row[f'{a}_fp_reads']} reads]"
+                  f"  |  {b}={row[f'{b}_assignment']} "
+                  f"[{row[f'{b}_fp_reads']} reads]")
+
+
 def main(argv=None):
     args = parse_args(argv)
 
@@ -2001,6 +2295,10 @@ def main(argv=None):
     if not args.no_ani:
         summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples,
                       truth, detected, host_keys, tax)
+
+    if not args.no_accession_conflicts:
+        summarise_accession_conflicts(args, profilers, auth_dir, calls,
+                                      scores_by_profiler, tax)
 
     report_unresolved(tax)
 
