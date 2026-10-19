@@ -47,6 +47,21 @@ produces, for every profiler:
      other column of it still matches what this run computes (see
      `cache_for_profiler`). Pass --no-cache to always remeasure.
 
+Every result that leans on KrakenUniq's screen is *KrakenUniq-adjusted* by
+default: a taxon the screen never surfaced was never offered to the profiler, so
+it counts neither as a prediction nor as a miss and the numbers describe the
+authentication step alone. `--no-kraken-adjust` switches the three summaries that
+report a single adjusted figure -- the Jaccard curve, the criteria tables and the
+ANI scatter's y axis -- to the unadjusted view, which charges the profiler for
+the screening step in front of it as well, and writes them under `.unadjusted`
+names so the two views can sit side by side in one outdir. The rest already
+carries both readings and so does not move: auth_metrics.tsv has `diff_full`
+beside `diff_kraken_adjusted`, auth_calls.tsv has the `krakenuniq_surfaced`
+column and splits misses into FN_profiler / FN_krakenuniq, auth_ani.tsv has both
+deficit columns, and the heatmap gives a never-surfaced cell its own style. That
+also keeps auth_calls.tsv, and with it the breadth-of-coverage cache, identical
+between the two modes.
+
 Ground truth is the simulated *reads* (`results/sim/<sample>/truth.tsv`), not the
 composition tables in meta_bench/config/, because gargammel pairs the `bact/list`
 weights with the genome files in readdir order (gargammel.pl:942 vs :1340) and so
@@ -894,22 +909,28 @@ def jaccard_at_threshold(sample, scores, truth, host_keys, include_host, cut,
     modern organism. Here every taxon clearing the cut counts as a claim that it
     is an ancient genome, which is what a score threshold actually asserts.
 
-    Both sides are restricted to what KrakenUniq surfaced in this sample, the
-    same adjustment diff_kraken_adjusted makes. It cuts in both directions: a
-    node the profiler only holds because an earlier run's screen left its
-    directory behind stops counting as a prediction, and a genome KrakenUniq
-    never offered stops counting as a miss. What is left measures the
+    `surfaced` is what KrakenUniq offered in this sample, and both sides are
+    restricted to it -- the same adjustment diff_kraken_adjusted makes. It cuts
+    in both directions: a node the profiler only holds because an earlier run's
+    screen left its directory behind stops counting as a prediction, and a genome
+    KrakenUniq never offered stops counting as a miss. What is left measures the
     authentication step rather than the screening step in front of it.
+
+    Pass surfaced=None (--no-kraken-adjust) for the unadjusted variant, which
+    compares against the sample's whole true ancient set and so scores the
+    screening step and the authentication step together, as a user of the
+    pipeline experiences them.
     """
     predicted = {k for (s, k), rec in scores.items()
-                 if s == sample and rec["score"] >= cut and k in surfaced
+                 if s == sample and rec["score"] >= cut
+                 and (surfaced is None or k in surfaced)
                  and (include_host or k not in host_keys)}
-    actual = ancient_truth_set(sample, truth, host_keys, include_host) & surfaced
-    return _jaccard(predicted, actual)
+    actual = ancient_truth_set(sample, truth, host_keys, include_host)
+    return _jaccard(predicted, actual if surfaced is None else actual & surfaced)
 
 
 def jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
-                           host_keys, include_host, cuts, detected):
+                           host_keys, include_host, cuts, detected, adjust=True):
     """One row per threshold, each profiler's mean-over-samples Jaccard."""
     rows = []
     for cut in cuts:
@@ -917,13 +938,15 @@ def jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
         for p in profilers:
             row[p] = _mean([
                 jaccard_at_threshold(s, scores_by_profiler[p], truth, host_keys,
-                                     include_host, cut, detected.get(s, set()))
+                                     include_host, cut,
+                                     detected.get(s, set()) if adjust else None)
                 for s in samples])
         rows.append(row)
     return rows
 
 
-def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples):
+def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples,
+                         adjusted=True):
     """Mean Jaccard against score threshold, one line per profiler."""
     import matplotlib
     matplotlib.use("Agg")
@@ -944,7 +967,7 @@ def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples):
     ax.set_ylabel(f"mean Jaccard over {n_samples} "
                   f"{'sample' if n_samples == 1 else 'samples'}")
     ax.set_title("Recovery of the true ancient genome set vs score threshold\n"
-                 "(KrakenUniq-adjusted)",
+                 + ("(KrakenUniq-adjusted)" if adjusted else ""),
                  fontsize=11)
     ax.set_ylim(0, max(1.0, max((r[p] for r in rows for p in profilers
                                  if r[p] == r[p]), default=0) * 1.15))
@@ -1052,7 +1075,7 @@ def node_criteria(folder, rma6, evenness):
 
 
 def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
-                    host_keys, include_host, detected, keep):
+                    host_keys, include_host, detected, keep, adjust=True):
     """Per-criterion (FP, FN, expected-pass, expected-fail, skipped) for a profiler.
 
     Every node the profiler scored is a trial. Its ground-truth category fixes
@@ -1060,7 +1083,9 @@ def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
     did: a criterion that fired when it should not have is a false positive, one
     that stayed silent when it should have fired is a false negative.
 
-    The trials are KrakenUniq-adjusted at both ends. An in-sample taxon KrakenUniq
+    The trials are KrakenUniq-adjusted at both ends unless `adjust` is off
+    (--no-kraken-adjust), which judges every node the profiler scored -- including
+    any left behind by an earlier run's screen, see below. An in-sample taxon KrakenUniq
     never surfaced has no node, so it is never charged a false negative -- it was
     never the authentication step's to find. In the other direction a node whose
     taxon is absent from *this* run's taxID.species is skipped: aMeta creates node
@@ -1080,7 +1105,7 @@ def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
     for (sample, key), rec in scores.items():
         if not include_host and key in host_keys:
             continue
-        if key not in detected.get(sample, set()):
+        if adjust and key not in detected.get(sample, set()):
             skipped += 1
             continue
         category = (truth[key]["category"] if is_present(truth, key, sample)
@@ -1104,12 +1129,13 @@ def criteria_counts(profiler, auth_dir, samples, scores, truth, coverage,
 
 
 def criteria_rows(profilers, auth_dir, samples, scores_by_profiler, truth,
-                  coverage_by_profiler, host_keys, include_host, detected, keep):
+                  coverage_by_profiler, host_keys, include_host, detected, keep,
+                  adjust=True):
     """(rows, skipped): one row per criterion, each profiler's FP/FN side by side."""
     per_profiler = {
         p: criteria_counts(p, auth_dir, samples, scores_by_profiler[p], truth,
                            coverage_by_profiler[p], host_keys, include_host,
-                           detected, keep)
+                           detected, keep, adjust)
         for p in profilers
     }
     rows = []
@@ -1292,11 +1318,19 @@ ANI_PLACES = {"ani": 2, "aligned_frac_sim": 3, "aligned_frac_auth": 3,
               "mean_diff_kraken_adjusted": 2, "mean_diff_full": 2,
               "mean_truth_frac": 5, "abund_intensity": 3}
 
-# The scatter's y axis. The KrakenUniq-adjusted deficit is the one that says
+# The scatter's y axis: a row key `ani_rows` fills with whichever of the two
+# deficits this run plots, so the label placer and the connectors below never
+# have to know which mode they are in. It is absent from ANI_COLS, so it stays
+# out of the TSV -- which carries both deficits either way.
+#
+# The KrakenUniq-adjusted deficit is the default because it is the one that says
 # something about authentication: a taxon KrakenUniq never surfaced was never
 # offered to the profiler, so the whole authentication chain never ran for it and
-# its full deficit measures the screening step instead of the scoring.
-Y_METRIC = "mean_diff_kraken_adjusted"
+# its full deficit measures the screening step instead of the scoring. Under
+# --no-kraken-adjust the full deficit is plotted instead and the x axis keeps its
+# meaning, but a point can then sit high because KrakenUniq never offered the
+# taxon rather than because its reference is divergent.
+Y_METRIC = "_plotted_diff"
 
 
 def read_contigs(path):
@@ -1422,7 +1456,8 @@ def taxon_mean_diff(key, samples, scores, truth, perfect, detected):
 
 
 def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
-             host_keys, genomes_dir, perfect, include_host, tax, min_af):
+             host_keys, genomes_dir, perfect, include_host, tax, min_af,
+             adjust=True):
     """One row per (profiler, taxon) for every taxon KrakenUniq ever surfaced.
 
     A taxon only earns a row when both ends of the comparison exist: the
@@ -1446,6 +1481,12 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
         KJ477415.1 for Lactococcus lactis, over which skani reports a perfectly
         true and perfectly meaningless 100% ANI.
       * skani found no hit at all.
+
+    `adjust` picks which deficit the scatter plots (see Y_METRIC); both are in
+    every row regardless. It does not change the taxon universe, which stays the
+    taxa KrakenUniq surfaced at least once: a taxon it never surfaced anywhere
+    has no node directory and so no authentication reference to compare, which
+    would exclude it in either mode.
     """
     universe = set()
     for keys in detected.values():
@@ -1501,6 +1542,7 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
                 "aligned_frac_auth": float("nan") if ani is None else ani[2],
                 "mean_diff_kraken_adjusted": adjusted,
                 "mean_diff_full": full,
+                Y_METRIC: adjusted if adjust else full,
                 "mean_truth_frac": _mean([info["abund"][s] for s in samples
                                           if s in info["abund"]]),
                 "abund_intensity": abundance_intensity(key, truth, samples, smax),
@@ -1621,7 +1663,8 @@ def place_labels(ax, fig, groups, anchor_of, points, label_of):
                     color=ink, zorder=4, arrowprops=leader)
 
 
-def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples):
+def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples,
+                       adjusted=True):
     """Score deficit (y) against reference divergence (x), one shape per profiler.
 
     ANI piles up between 98% and 100%, where a linear axis is unreadable, so x is
@@ -1687,7 +1730,8 @@ def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples):
                         for d in decades], fontsize=8)
     ax.set_xlabel("divergence 1 − ANI between the authentication reference and "
                   "the simulated genome (log scale)")
-    ax.set_ylabel("mean KrakenUniq-adjusted |perfect − score| over "
+    ax.set_ylabel(("mean KrakenUniq-adjusted " if adjusted else "mean ")
+                  + "|perfect − score| over "
                   f"{n_samples} {'sample' if n_samples == 1 else 'samples'}")
     ax.set_title("Authentication score deficit vs reference divergence "
                  "(ancient genomes)", fontsize=11)
@@ -1981,9 +2025,18 @@ def parse_args(argv=None):
     ap.add_argument("--no-cache", action="store_true",
                     help="always remeasure breadth of coverage instead of "
                          "reusing an auth_calls.tsv already in --outdir")
+    ap.add_argument("--no-kraken-adjust", action="store_true",
+                    help="Report the kraken-unajusted plots. Default (adjusted) is "
+                         "the authentication-only view -- a taxon not included in the screen "
+                         " counts neither as a prediction nor as a miss. ")
     ap.add_argument("--include-host", action="store_true",
                     help="keep host taxa (e.g. Homo sapiens); default drops them")
     return ap.parse_args(argv)
+
+
+def adjust_tag(args):
+    """Filename tag that keeps the two KrakenUniq views out of each other's way."""
+    return ".unadjusted" if args.no_kraken_adjust else ""
 
 
 def discover_targets(auth_dir, profilers_arg):
@@ -2062,17 +2115,22 @@ def summarise_jaccard(args, profilers, scores_by_profiler, samples, truth,
     # predict every node the profiler screened, including the ones it explicitly
     # scored 0 and rejected, which is not a threshold anyone would set; ">= 10"
     # is the other end, "only a perfect score counts".
+    adjust = not args.no_kraken_adjust
+    tag = adjust_tag(args)
     cuts = list(range(1, int(args.ancient_score) + 1))
     rows = jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
-                                  host_keys, args.include_host, cuts, detected)
-    out_tsv = os.path.join(args.outdir, "auth_jaccard_threshold.tsv")
+                                  host_keys, args.include_host, cuts, detected,
+                                  adjust)
+    out_tsv = os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.tsv")
     write_tsv(out_tsv, ["threshold"] + list(profilers), rows,
               {p: 4 for p in profilers})
-    print(f"\nJaccard vs score threshold -> {out_tsv}")
+    print(f"\nJaccard vs score threshold ({'KrakenUniq-adjusted' if adjust else 'unadjusted'})"
+          f" -> {out_tsv}")
     render_jaccard_curve(
         rows, profilers,
-        os.path.join(args.outdir, "auth_jaccard_threshold.pdf"),
-        os.path.join(args.outdir, "auth_jaccard_threshold.png"), len(samples))
+        os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.pdf"),
+        os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.png"),
+        len(samples), adjust)
     print_tsv(["threshold"] + list(profilers), rows, {p: 4 for p in profilers})
 
 
@@ -2091,7 +2149,7 @@ def summarise_criteria(args, profilers, auth_dir, samples, scores_by_profiler,
         rows, skipped = criteria_rows(
             profilers, auth_dir, samples, scores_by_profiler, truth,
             coverage_by_profiler, host_keys, args.include_host, detected,
-            criteria_filter(categories, taxids))
+            criteria_filter(categories, taxids), not args.no_kraken_adjust)
         judged = {p: rows[0][f"{p}_expected_pass"] + rows[0][f"{p}_expected_fail"]
                   for p in profilers}
         if not any(judged.values()):
@@ -2100,7 +2158,7 @@ def summarise_criteria(args, profilers, auth_dir, samples, scores_by_profiler,
             continue
 
         # <name>.<variant>.<ext>, the same shape as auth_summary_heatmap.malt.pdf
-        tag = f".{slug}" if slug else ""
+        tag = (f".{slug}" if slug else "") + adjust_tag(args)
         out_tsv = os.path.join(args.outdir, f"auth_criteria{tag}.tsv")
         write_tsv(out_tsv, cols, rows)
         print(f"\nPer-criterion FP/FN{title_suffix} -> {out_tsv}")
@@ -2130,10 +2188,11 @@ def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
         print(f"  no such directory, skipping -- pass --genomes")
         return
 
+    adjust = not args.no_kraken_adjust
     rows, skipped = ani_rows(
         profilers, scores_by_profiler, auth_dir, samples, truth, detected,
         host_keys, args.genomes, perfect_scores(args), args.include_host, tax,
-        args.min_aligned_frac)
+        args.min_aligned_frac, adjust)
 
     for reason, keys in sorted(skipped.items()):
         names = sorted({truth.get(k, {}).get("display") or tax.name(k) or k
@@ -2154,13 +2213,16 @@ def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
               + ", ".join(f"{t} ({'+'.join(ps)} only)"
                           for t, ps in sorted(lone.items())))
 
+    # the table is the same in both modes -- it carries both deficits -- so only
+    # the scatter, which plots one of them, takes the .unadjusted name
+    tag = adjust_tag(args)
     out_tsv = os.path.join(args.outdir, "auth_ani.tsv")
     write_tsv(out_tsv, ANI_COLS, rows, ANI_PLACES)
     print(f"  {len(rows)} row(s) -> {out_tsv}")
     render_ani_scatter(rows, profilers,
-                       os.path.join(args.outdir, "auth_ani_scatter.pdf"),
-                       os.path.join(args.outdir, "auth_ani_scatter.png"),
-                       len(samples))
+                       os.path.join(args.outdir, f"auth_ani_scatter{tag}.pdf"),
+                       os.path.join(args.outdir, f"auth_ani_scatter{tag}.png"),
+                       len(samples), adjust)
 
 
 def profiler_reference_labels(results_dir, profiler, samples):

@@ -36,6 +36,12 @@ pathogenomesFound: /PATH/TO/pathogensfound.tab
 malt_nt_fasta: resources/malt/library.fna
 malt_seqid2taxid_db: resources/malt/seqid2taxid.map
 malt_accession2taxid: resources/malt/nucl.accession2taxid
+
+# malt-build's -tn/--parseTaxonNames. true (malt-build's default) also labels a
+# reference from organism names parsed out of its FASTA description, LCA'd
+# together, which pulls labels to coarser or unrelated nodes; false labels from
+# the accession alone, matching ngsLCA's -acc2tax.
+malt_parse_taxon_names: false
 ncbi_db: resources/ncbi
 
 n_unique_kmers: 1000
@@ -50,6 +56,11 @@ aligner:
   name: strobealign
   repo: "https://github.com/ksahlin/strobealign"
   ref: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
-  args: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
-  max_secondary: 20
+  args: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12 -N 20"
+  # Discard alignments covering < min_aligned_bp query bases or < min_aligned_frac
+  # of the read. strobealign aligns locally and soft-clips; ngsLCA scores identity
+  # over the aligned block only, so short seed matches otherwise clear
+  # -simscorelow as full species hits. Set both to 0 to disable.
+  min_aligned_bp: 20
+  min_aligned_frac: 0.8
 ngslca_args: "-simscorelow 0.85 -simscorehigh 1.0"

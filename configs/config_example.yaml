@@ -21,25 +21,25 @@ datasets:
     read_length: [40]
     proportions: [0.2, 0.00, 0.8]  # [bacterial, contaminant, endogenous]
 
-    # Accuracy evaluation parameters
-    score_thresholds: [60, 70, 80]
-    k: [11, 13, 15, 17, 19, 21]
-    # k: [13, 15, 17, 19, 21, 25, 31]
-    main_score_threshold: 60
-    main_k: 17
-    # s = k - syncmer_density + 1
-    syncmer_density: 5
+# Accuracy evaluation parameters
+score_thresholds: [60, 70, 80]
+k: [11, 13, 15, 17, 19, 21]
+# k: [13, 15, 17, 19, 21, 25, 31]
+main_score_threshold: 60
+main_k: 17
+# s = k - syncmer_density + 1
+syncmer_density: 5
 
-    # Secondary-alignment accuracy: a read is correct if a secondary alignment
-    # tied on score with the primary overlaps the truth. Off by default. 
-    # Enable here or via `run.py --secondary-accuracy`.
-    # Not yet applicable to bwaaln / safari. strobealign uses -N (bounded by -M, depends on -S).
-    secondary_accuracy: false
-    secondary_n: 100
-    secondary_m: 100
-    secondary_s: 0.5
+# Secondary-alignment accuracy: a read is correct if a secondary alignment
+# tied on score with the primary overlaps the truth. Off by default. 
+# Enable here or via `run.py --secondary-accuracy`.
+# Not yet applicable to bwaaln / safari. strobealign uses -N (bounded by -M, depends on -S).
+secondary_accuracy: false
+secondary_n: 100
+secondary_m: 100
+secondary_s: 0.5
 
-    num_reads: 500000
+num_reads: 500000
 
 # Alignment parameters
 versions:
