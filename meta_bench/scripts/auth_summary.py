@@ -534,9 +534,15 @@ def node_table(path):
     return dict(zip(header, vals))
 
 
+def extract_dir(folder):
+    """The node's extract tables: Extract_output/, or MaltExtract_output/ in older runs."""
+    new = os.path.join(folder, "Extract_output")
+    return new if os.path.isdir(new) else os.path.join(folder, "MaltExtract_output")
+
+
 def read_node_reads(folder):
     """Aligned reads on the node's reference (TotalAlignmentsOnReference), or 0."""
-    rd = os.path.join(folder, "MaltExtract_output", "default", "readDist")
+    rd = os.path.join(extract_dir(folder), "default", "readDist")
     if not os.path.isdir(rd):
         return 0
     for fn in sorted(os.listdir(rd)):
@@ -1036,7 +1042,7 @@ def node_criteria(folder, rma6, evenness):
     passed in because it is measured off the per-base depth file alongside
     breadth (see node_coverage) rather than re-read here.
     """
-    m = os.path.join(folder, "MaltExtract_output")
+    m = extract_dir(folder)
     dam = node_table(f"{m}/default/damageMismatch/{rma6}_damageMismatch.txt")
     ed_all = node_table(f"{m}/default/editDistance/{rma6}_editDistance.txt")
     ed_anc = node_table(f"{m}/ancient/editDistance/{rma6}_editDistance.txt")
