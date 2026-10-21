@@ -16,13 +16,14 @@ produces, for every profiler:
      ignoring taxa KrakenUniq never surfaced), `jaccard_all`/`jaccard_ancient`
      (found with score > 0 vs in-sample truth), `mean_reads_per_node`, and
      `evenness_tp`/`evenness_fp` (breadth of coverage over true/false positives).
-  3. `auth_ani.tsv` + `auth_ani_scatter.{pdf,png}`: skani ANI between the
-     reference a taxon was authenticated against and the genome the simulation
-     actually drew its reads from, against that taxon's mean KrakenUniq-adjusted
-     score deficit (the TSV carries the unadjusted one too). One point per
-     (profiler, taxon) over the *ancient* taxa KrakenUniq surfaced at least once
-     -- a modern genome's deficit is set by the damage criteria it cannot reach,
-     not by its reference, so it is tabulated but not plotted.
+  3. `auth_ani.tsv` + `auth_ani_scatter.{ancient,modern}.{pdf,png}`: skani ANI
+     between the reference a taxon was authenticated against and the genome the
+     simulation actually drew its reads from, against that taxon's mean
+     KrakenUniq-adjusted score deficit over the samples that contain it (the TSV
+     carries the unadjusted one too). One point per (profiler, taxon) over the
+     taxa KrakenUniq surfaced at least once, coloured by mean abundance; ancient
+     and modern taxa get separate plots, since a modern genome's deficit is
+     dominated by the damage criteria it cannot reach.
      This is the diagnostic for score deficits that are a property of the
      reference database rather than of the profiler: several score.R criteria
      (edit distance, ANI, evenness) compare reads to the *top reference*, which
@@ -1324,10 +1325,10 @@ def print_criteria_table(rows, profilers, judged, skipped):
 ANI_COLS = ["profiler", "taxid", "taxon", "category", "auth_ref", "sim_genome",
             "ani", "aligned_frac_sim", "aligned_frac_auth",
             "mean_diff_kraken_adjusted", "mean_diff_full", "mean_truth_frac",
-            "abund_intensity", "samples_present", "samples_scored", "plotted"]
+            "samples_present", "samples_surfaced", "samples_scored", "plotted"]
 ANI_PLACES = {"ani": 2, "aligned_frac_sim": 3, "aligned_frac_auth": 3,
               "mean_diff_kraken_adjusted": 2, "mean_diff_full": 2,
-              "mean_truth_frac": 5, "abund_intensity": 3}
+              "mean_truth_frac": 5}
 
 # The scatter's y axis: a row key `ani_rows` fills with whichever of the two
 # deficits this run plots, so the label placer and the connectors below never
@@ -1383,33 +1384,6 @@ def skani_ani(auth_fasta, sim_fasta, cache):
     return out
 
 
-def abundance_intensity(key, truth, samples, smax):
-    """The heatmap's colour intensity for one taxon, averaged over its samples.
-
-    `build_matrix` normalises each heatmap cell against the most abundant taxon
-    in *that* sample, so a cell's intensity reads as "how much of this sample is
-    this organism, relative to its biggest member". Averaging that same ratio
-    over the samples the taxon was simulated into carries the reading to a
-    scatter point, where there is one mark per taxon rather than one per cell.
-    """
-    abund = truth[key]["abund"]
-    return _mean([abund[s] / smax[s] for s in samples if s in abund]) or 0.0
-
-
-def sample_abundance_max(truth, samples, host_keys, include_host):
-    """Per-sample maximum ground-truth abundance: the intensity normaliser.
-
-    Matches the `smax` build_matrix computes for the heatmaps -- the host dwarfs
-    every microbe, so including it when it is not drawn would flatten the range.
-    """
-    smax = {}
-    for sample in samples:
-        vals = [info["abund"].get(sample, 0.0) for k, info in truth.items()
-                if include_host or k not in host_keys]
-        smax[sample] = max(vals, default=0.0) or 1.0
-    return smax
-
-
 def auth_reference_fasta(auth_dir, profiler, samples, key, scores):
     """(ref_id, path) of the reference this taxon was authenticated against.
 
@@ -1435,35 +1409,30 @@ def auth_reference_fasta(auth_dir, profiler, samples, key, scores):
 
 
 def taxon_mean_diff(key, samples, scores, truth, perfect, detected):
-    """(KrakenUniq-adjusted, full) mean |perfect - score| for one taxon.
+    """(KrakenUniq-adjusted, full) mean |perfect - score| for one taxon, over the
+    samples it was simulated into.
 
-    Both run over every sample: samples where the taxon is absent contribute
-    their own deficit (0 for a correct rejection, the score itself for a false
-    positive), which is why the mean is not taken over the in-sample cells only.
-    That makes each value one taxon's contribution to the matching
-    auth_metrics.tsv column, scaled by the sample count -- summing over *all*
-    taxa would reproduce that metric, though auth_ani.tsv holds only the ones
-    with both a reference and a simulated genome and so will not add up to it.
+    Samples without the taxon are left out: their deficit is a false-positive
+    score, which says nothing about how well the taxon's own reads authenticate
+    against its reference, and averaging over them would also scale each point
+    by how many samples the taxon happens to be in.
 
-    The adjusted variant drops the cells where the taxon was simulated but
-    KrakenUniq never surfaced it -- the same rule diff_kraken_adjusted uses.
-    Those are misses of the screening step, which happens before any reference is
-    chosen, so counting them against reference divergence would be reading a
-    KrakenUniq result off an axis that knows nothing about KrakenUniq.
+    The adjusted variant also drops the samples where KrakenUniq never surfaced
+    the taxon -- the same rule diff_kraken_adjusted uses. Those are misses of the
+    screening step, which happens before any reference is chosen, so counting
+    them against reference divergence would be reading a KrakenUniq result off
+    an axis that knows nothing about KrakenUniq. NaN when no sample is left.
     """
-    full = adjusted = 0
+    full, adjusted = [], []
     for sample in samples:
-        in_sample = is_present(truth, key, sample)
-        want = perfect[truth[key]["category"]] if in_sample else 0
+        if not is_present(truth, key, sample):
+            continue
         rec = scores.get((sample, key))
-        d = abs(want - (rec["score"] if rec else 0))
-        full += d
-        if not (in_sample and key not in detected.get(sample, set())):
-            adjusted += d
-    n = len(samples)
-    if not n:
-        return float("nan"), float("nan")
-    return adjusted / n, full / n
+        d = abs(perfect[truth[key]["category"]] - (rec["score"] if rec else 0))
+        full.append(d)
+        if key in detected.get(sample, set()):
+            adjusted.append(d)
+    return _mean(adjusted), _mean(full)
 
 
 def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
@@ -1481,17 +1450,19 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
     `plotted` marks the rows the scatter uses; the rest stay in the TSV with
     their numbers intact. A row is held back when
 
-      * the taxon is modern in the sample. score.R is an ancient-DNA score, so a
-        modern genome forfeits both damage criteria, the PMD criterion and (the
-        modern gargammel pass drawing longer fragments) the read-length one --
-        four of ten points, none of which the reference can influence. Its
-        deficit measures the damage model, and reading it off a divergence axis
-        would be reading an answer to a different question.
       * skani aligned less than `min_af` of either genome, because the top
         reference is not always a whole genome: MALT picks e.g. the 1.1 kb
         KJ477415.1 for Lactococcus lactis, over which skani reports a perfectly
         true and perfectly meaningless 100% ANI.
       * skani found no hit at all.
+      * the plotted deficit is undefined: in adjusted mode, KrakenUniq never
+        surfaced the taxon in a sample that contains it.
+
+    Modern taxa are plotted apart from ancient ones (see render_ani_scatter):
+    score.R is an ancient-DNA score, so a modern genome forfeits both damage
+    criteria, the PMD criterion and (the modern gargammel pass drawing longer
+    fragments) the read-length one -- four of ten points the reference cannot
+    influence.
 
     `adjust` picks which deficit the scatter plots (see Y_METRIC); both are in
     every row regardless. It does not change the taxon universe, which stays the
@@ -1506,7 +1477,6 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
         universe -= host_keys
 
     rows, skipped, cache = [], {}, {}
-    smax = sample_abundance_max(truth, samples, host_keys, include_host)
     for key in sorted(universe, key=lambda k: (truth.get(k, {}).get("display")
                                                or tax.name(k) or k).lower()):
         info = truth.get(key)
@@ -1528,15 +1498,14 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
             ani = skani_ani(auth_fasta, sim_fasta, cache)
             adjusted, full = taxon_mean_diff(key, samples, scores, truth,
                                              perfect, detected)
-            if info["category"] != "ancient":
-                reason = ("modern in the sample: four criteria are unreachable "
-                          "without deamination, so its deficit is set by the "
-                          "damage model rather than by the reference")
-            elif ani is None:
+            plotted_diff = adjusted if adjust else full
+            if ani is None:
                 reason = "no skani hit (too divergent to align)"
             elif min(ani[1], ani[2]) < min_af:
                 reason = (f"skani aligned < {min_af:.0%} of a genome (top "
                           "reference is not a whole genome)")
+            elif plotted_diff != plotted_diff:
+                reason = "never surfaced by KrakenUniq in a sample that contains it"
             else:
                 reason = None
             if reason:
@@ -1553,11 +1522,13 @@ def ani_rows(profilers, scores_by_profiler, auth_dir, samples, truth, detected,
                 "aligned_frac_auth": float("nan") if ani is None else ani[2],
                 "mean_diff_kraken_adjusted": adjusted,
                 "mean_diff_full": full,
-                Y_METRIC: adjusted if adjust else full,
+                Y_METRIC: plotted_diff,
                 "mean_truth_frac": _mean([info["abund"][s] for s in samples
                                           if s in info["abund"]]),
-                "abund_intensity": abundance_intensity(key, truth, samples, smax),
                 "samples_present": sum(is_present(truth, key, s) for s in samples),
+                "samples_surfaced": sum(is_present(truth, key, s)
+                                        and key in detected.get(s, set())
+                                        for s in samples),
                 "samples_scored": sum((s, key) in scores for s in samples),
                 "plotted": "no" if reason else "yes",
             })
@@ -1593,6 +1564,8 @@ def point_label(row):
 # A label further than this from its point (in points) gets a leader line: close
 # enough and the pairing is obvious, far enough and it has to be drawn.
 LEADER_THRESHOLD_PT = 12
+LABEL_INK = (0.2, 0.2, 0.2)
+ABUNDANCE_CMAP = "viridis"
 
 
 def place_labels(ax, fig, groups, anchor_of, points, label_of):
@@ -1659,9 +1632,7 @@ def place_labels(ax, fig, groups, anchor_of, points, label_of):
         dx, dy, side, box = chosen or fallback or (8, 0, "left", None)
         if box is not None:
             placed.append(box)
-        # a darkened marker colour, so the label also says which point is its own
-        base = CAT_COLOR.get(anchor["category"], (0.25, 0.25, 0.25))
-        ink = tuple(c * 0.62 for c in base)
+        ink = LABEL_INK
         leader = None
         if math.hypot(dx, dy) > LEADER_THRESHOLD_PT:
             # leave from the label edge that faces the point, not its centre
@@ -1674,32 +1645,39 @@ def place_labels(ax, fig, groups, anchor_of, points, label_of):
                     color=ink, zorder=4, arrowprops=leader)
 
 
-def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples,
+def render_ani_scatter(rows, profilers, category, out_pdf, out_png, abund_range,
                        adjusted=True):
-    """Score deficit (y) against reference divergence (x), one shape per profiler.
+    """Score deficit (y) against reference divergence (x) for one category's taxa,
+    one shape per profiler, coloured by mean ground-truth abundance.
 
     ANI piles up between 98% and 100%, where a linear axis is unreadable, so x is
     the divergence 1 - ANI on a log scale -- each decade is a tenfold difference
     in how far the authentication reference sits from the genome the reads
-    actually came from. A top axis carries the equivalent ANI. The two profilers'
-    points for one taxon are joined by a thin line, so a taxon they disagree
-    about (which is about the profiler) is distinguishable at a glance from one
-    they agree on (which is about the reference).
+    actually came from. The profilers' points for one taxon are joined by a thin
+    line, so a taxon they disagree about (which is about the profiler) is
+    distinguishable at a glance from one they agree on (which is about the
+    reference). `abund_range` is shared by the category plots so one colour
+    means one abundance in both.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
     from matplotlib.lines import Line2D
 
-    plotted = [r for r in rows if r["plotted"] == "yes"]
+    plotted = [r for r in rows
+               if r["plotted"] == "yes" and r["category"] == category]
     if not plotted:
-        print("  no taxon has both an authentication reference and a simulated "
-              "genome with a usable skani hit, skipping the ANI scatter")
+        print(f"  no {category} taxon has both an authentication reference and a "
+              "simulated genome with a usable skani hit, skipping its ANI scatter")
         return
 
     markers = ["o", "s", "^", "D", "v"]
     shape = {p: markers[i % len(markers)] for i, p in enumerate(profilers)}
-    fig, ax = plt.subplots(figsize=(9.5, 6.0))
+    cmap = matplotlib.colormaps[ABUNDANCE_CMAP]
+    norm = Normalize(*(100 * a for a in abund_range))
+    fig, ax = plt.subplots(figsize=(10.5, 6.0))
 
     # keyed by taxid, not display name: the connector has to join the profilers'
     # views of one node, and two taxids can carry the same binomial. Labels are
@@ -1716,16 +1694,10 @@ def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples,
             ax.plot([divergence(r) for r in pair], [r[Y_METRIC] for r in pair],
                     color="0.72", linewidth=0.8, zorder=2)
     for row in plotted:
-        base = CAT_COLOR.get(row["category"], (0.4, 0.4, 0.4))
-        # same white -> category-colour ramp the heatmap cells use, so a pale
-        # point here and a pale cell there mean the same thing. The edge is the
-        # saturated colour rather than white: at low abundance the fill is nearly
-        # background, and a white edge would leave nothing to see.
         ax.scatter(divergence(row), row[Y_METRIC],
                    marker=shape[row["profiler"]], s=58,
-                   facecolor=blend(base, row["abund_intensity"]),
-                   edgecolor=tuple(c * 0.62 for c in base),
-                   linewidth=0.9, zorder=3)
+                   facecolor=cmap(norm(100 * row["mean_truth_frac"])),
+                   edgecolor="0.25", linewidth=0.7, zorder=3)
 
     ax.set_xscale("log")
     xs = [divergence(r) for r in plotted]
@@ -1742,46 +1714,23 @@ def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples,
     ax.set_xlabel("divergence 1 − ANI between the authentication reference and "
                   "the simulated genome (log scale)")
     ax.set_ylabel(("mean KrakenUniq-adjusted " if adjusted else "mean ")
-                  + "|perfect − score| over "
-                  f"{n_samples} {'sample' if n_samples == 1 else 'samples'}")
+                  + "|perfect − score|\nover the samples containing the taxon")
     ax.set_title("Authentication score deficit vs reference divergence "
-                 "(ancient genomes)", fontsize=11)
+                 f"({category} genomes)", fontsize=11)
     ax.grid(True, which="both", linewidth=0.4, color="0.88", zorder=0)
     ax.set_axisbelow(True)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
 
-    def swatch(face, edge, marker="o"):
-        return Line2D([], [], linestyle="", marker=marker, markersize=7,
-                      markerfacecolor=face, markeredgecolor=edge,
-                      markeredgewidth=0.9, color="none")
-
-    prof = [Line2D([], [], linestyle="", marker=shape[p], color="0.35",
-                   markersize=7, label=p) for p in profilers]
-    ax.add_artist(ax.legend(handles=prof, title="profiler", fontsize=8,
-                            title_fontsize=8, frameon=False, loc="upper left"))
-
-    # Anchor the ramp on real points rather than on 0/0.5/1: the taxa here occupy
-    # a middle band of the scale (no organism is its sample's largest in every
-    # sample, so averaging pulls everything inward), and a legend spanning the
-    # full ramp would advertise a contrast the figure does not contain. Labelling
-    # the swatches with the abundance they stand for makes it quantitative.
-    ranked = sorted(plotted, key=lambda r: r["abund_intensity"])
-    picks, seen = [], set()
-    for row in (ranked[0], ranked[len(ranked) // 2], ranked[-1]):
-        if row["taxid"] not in seen:
-            seen.add(row["taxid"])
-            picks.append(row)
-    ramp, labels = [], []
-    for row in picks:
-        base = CAT_COLOR.get(row["category"], (0.4, 0.4, 0.4))
-        ramp.append(swatch(blend(base, row["abund_intensity"]),
-                           tuple(c * 0.62 for c in base)))
-        labels.append(f"{row['mean_truth_frac'] * 100:.1f}% of a sample")
-    ax.legend(handles=ramp, labels=labels, fontsize=8, title_fontsize=8,
-              title="mean ground-truth abundance",
-              frameon=False, loc="center left", handletextpad=0.6,
-              labelspacing=0.35)
+    prof = [Line2D([], [], linestyle="", marker=shape[p], markerfacecolor="white",
+                   markeredgecolor="0.25", markersize=7, label=p) for p in profilers]
+    ax.legend(handles=prof, title="profiler", fontsize=8, title_fontsize=8,
+              frameon=False, loc="upper left")
+    cbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02,
+                        fraction=0.04)
+    cbar.set_label("mean ground-truth abundance\n(% of sample reads, samples "
+                   "containing the taxon)", fontsize=8)
+    cbar.ax.tick_params(labelsize=8)
 
     # labels last: they need the final axis limits to know where the edges are
     place_labels(ax, fig, groups,
@@ -1792,7 +1741,7 @@ def render_ani_scatter(rows, profilers, out_pdf, out_png, n_samples,
     fig.savefig(out_pdf, bbox_inches="tight")
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  ANI scatter ({len(plotted)} point(s)) -> {out_pdf}")
+    print(f"  ANI scatter, {category} ({len(plotted)} point(s)) -> {out_pdf}")
 
 
 # --------------------------------------------------------------------------- #
@@ -2230,10 +2179,12 @@ def summarise_ani(args, profilers, scores_by_profiler, auth_dir, samples, truth,
     out_tsv = os.path.join(args.outdir, "auth_ani.tsv")
     write_tsv(out_tsv, ANI_COLS, rows, ANI_PLACES)
     print(f"  {len(rows)} row(s) -> {out_tsv}")
-    render_ani_scatter(rows, profilers,
-                       os.path.join(args.outdir, f"auth_ani_scatter{tag}.pdf"),
-                       os.path.join(args.outdir, f"auth_ani_scatter{tag}.png"),
-                       len(samples), adjust)
+    abund = [r["mean_truth_frac"] for r in rows if r["plotted"] == "yes"]
+    abund_range = (min(abund), max(abund)) if abund else (0.0, 1.0)
+    for category in ("ancient", "modern"):
+        stem = os.path.join(args.outdir, f"auth_ani_scatter.{category}{tag}")
+        render_ani_scatter(rows, profilers, category, f"{stem}.pdf", f"{stem}.png",
+                           abund_range, adjust)
 
 
 def profiler_reference_labels(results_dir, profiler, samples):
