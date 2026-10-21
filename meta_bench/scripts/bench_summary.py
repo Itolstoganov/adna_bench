@@ -29,9 +29,15 @@ job's wall time includes the contention. Peak RSS for a JVM tool (MALT) is
 bounded by its -Xmx heap and is an upper bound on what it needs, not a
 requirement.
 
+Aligner + ngsLCA profilers write to benchmarks/{ALIGNMENT,NGSLCA}/<aligner>/;
+runs from before that layout (flat ALIGNMENT/, NGSLCA/) are read as strobealign.
+Rules missing from the run (e.g. KrakenUniq reused from an earlier run) can be
+taken from --extra-benchmarks; they are marked with '*'.
+
 Usage:
     python bench_summary.py --rundir meta_bench/runs/sim_dataset
     python bench_summary.py --rundir <dir> --outdir <dir>   # also write TSVs
+    python bench_summary.py --rundir <dir> --extra-benchmarks <dir>/old_benchmarks
 """
 
 import argparse
@@ -46,11 +52,16 @@ import sys
 # backend needs one line here and nothing else.
 PROFILER_STAGES = (
     ("malt", "alignment + LCA", "MALT"),
-    ("strobealign", "alignment", "ALIGNMENT"),
-    ("strobealign", "taxonomic assignment", "NGSLCA"),
+    ("strobealign", "alignment", "ALIGNMENT/strobealign"),
+    ("strobealign", "taxonomic assignment", "NGSLCA/strobealign"),
+    ("bowtie2", "alignment", "ALIGNMENT/bowtie2"),
+    ("bowtie2", "taxonomic assignment", "NGSLCA/bowtie2"),
 )
+# Flat layout of single-aligner runs from before per-aligner directories.
+LEGACY_RULES = {"ALIGNMENT/strobealign": "ALIGNMENT", "NGSLCA/strobealign": "NGSLCA"}
 # Paid once per database/binary, not per sample.
-SETUP_RULES = ("BUILD_MALT_DB", "COMPILE_STROBEALIGN", "REFERENCE_SUBSET")
+SETUP_RULES = ("BUILD_MALT_DB", "COMPILE_STROBEALIGN", "REFERENCE_SUBSET",
+               "BOWTIE2_REFERENCE_INDEX")
 # Upstream of every profiler, so it differentiates none of them -- but it sets
 # the pipeline's real memory ceiling, so it is worth showing.
 SHARED_RULES = ("KRAKENUNIQ", "FILTER_KRAKENUNIQ_OUTPUT", "CUTADAPT_ADAPTER_TRIMMING")
@@ -60,10 +71,10 @@ RULE_COLS = ["rule", "n", "wall_mean_s", "wall_min_s", "wall_max_s", "wall_total
 PHASE_COLS = ["tool", "phase", "mean_s", "share_pct", "n", "note"]
 
 
-def read_benchmarks(rundir, rule):
+def read_benchmarks(bench_dir, rule):
     """Rows of every benchmark file for `rule`. A repeat() benchmark has several."""
     rows = []
-    for path in sorted(glob.glob(os.path.join(rundir, "benchmarks", rule, "*.txt"))):
+    for path in sorted(glob.glob(os.path.join(bench_dir, rule, "*.txt"))):
         with open(path) as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 row["_job"] = os.path.basename(path).replace(".benchmark.txt", "")
@@ -78,9 +89,16 @@ def _num(row, key, default=float("nan")):
         return default
 
 
-def summarise_rule(rundir, rule):
-    """Aggregate one rule's benchmark rows, or None if it never ran."""
-    rows = read_benchmarks(rundir, rule)
+def summarise_rule(bench_dirs, rule):
+    """Aggregate one rule's benchmark rows from the first of `bench_dirs` that
+    has them, or None if it never ran. Rows from a fallback dir get a '*'."""
+    rows = []
+    for i, bench_dir in enumerate(bench_dirs):
+        for name in (rule, LEGACY_RULES.get(rule)):
+            if name and not rows:
+                rows = read_benchmarks(bench_dir, name)
+        if rows:
+            break
     if not rows:
         return None
     wall = [_num(r, "s") for r in rows]
@@ -88,7 +106,7 @@ def summarise_rule(rundir, rule):
     cpu = [_num(r, "cpu_time") for r in rows]
     total_wall = sum(wall)
     return {
-        "rule": rule,
+        "rule": rule + ("*" if i else ""),
         "n": len(rows),
         "wall_mean_s": stats.mean(wall),
         "wall_min_s": min(wall),
@@ -173,12 +191,20 @@ def ngslca_log_walltime(path):
     return float(m.group(1)) if m else None
 
 
+def _logs(rundir, *patterns):
+    """Logs matching the first of `patterns` that matches anything."""
+    for pattern in patterns:
+        paths = sorted(glob.glob(os.path.join(rundir, pattern)))
+        if paths:
+            return paths
+    return []
+
+
 def phase_rows(rundir):
     """Table-3 rows: per-tool phase means with their share of that tool's total."""
     rows = []
 
-    malt = [malt_log_phases(p)
-            for p in sorted(glob.glob(os.path.join(rundir, "logs/MALT/*.log")))]
+    malt = [malt_log_phases(p) for p in _logs(rundir, "logs/MALT/*.log")]
     malt = [m for m in malt if m["total"] > 0]
     if malt:
         total = stats.mean(m["total"] for m in malt)
@@ -196,8 +222,8 @@ def phase_rows(rundir):
                      "note": f"self-reported peak {stats.mean(m['peak_gb'] for m in malt):.1f} GB "
                              "(bounded by -Xmx, an upper bound not a requirement)"})
 
-    strobe = [strobealign_log_phases(p)
-              for p in sorted(glob.glob(os.path.join(rundir, "logs/ALIGNMENT/*.log")))]
+    strobe = [strobealign_log_phases(p) for p in _logs(
+        rundir, "logs/ALIGNMENT/strobealign/*.log", "logs/ALIGNMENT/*.log")]
     strobe = [s for s in strobe if s["index"] or s["map"]]
     if strobe:
         wall = stats.mean(s["index"] + s["map"] for s in strobe)
@@ -216,12 +242,15 @@ def phase_rows(rundir):
                      "mean_s": wall, "share_pct": 100.0, "n": len(strobe),
                      "note": "the rule's wall time is larger: it also runs pigz + samtools sort"})
 
-    lca = [t for t in (ngslca_log_walltime(p)
-                       for p in sorted(glob.glob(os.path.join(rundir, "logs/NGSLCA/*.log"))))
-           if t is not None]
-    if lca:
-        rows.append({"tool": "ngsLCA", "phase": "TOTAL", "mean_s": stats.mean(lca),
-                     "share_pct": 100.0, "n": len(lca), "note": "self-reported walltime"})
+    # bowtie2 logs no timings, so it only appears through its ngsLCA step
+    for tool, patterns in [("ngsLCA", ["logs/NGSLCA/*.log"]),
+                           ("ngsLCA (strobealign)", ["logs/NGSLCA/strobealign/*.log"]),
+                           ("ngsLCA (bowtie2)", ["logs/NGSLCA/bowtie2/*.log"])]:
+        lca = [t for t in map(ngslca_log_walltime, _logs(rundir, *patterns))
+               if t is not None]
+        if lca:
+            rows.append({"tool": tool, "phase": "TOTAL", "mean_s": stats.mean(lca),
+                         "share_pct": 100.0, "n": len(lca), "note": "self-reported walltime"})
     return rows
 
 
@@ -273,13 +302,16 @@ def print_profiler_table(by_profiler):
                   f"   [{s['rule']}]")
         if len(entries) > 1:
             print(f"    {'TOTAL':<34}{wall:>9.1f}s{rss:>9.1f} GB")
-        print(f"    {'x 10 samples':<34}{fmt_secs(wall * 10):>16}")
+        n = max(s["n"] for _stage, s in entries)
+        print(f"    {f'x {n} samples':<34}{fmt_secs(wall * n):>16}")
 
-    if len(totals) == 2:
-        (pa, (wa, ra)), (pb, (wb, rb)) = sorted(totals.items(),
-                                                key=lambda kv: -kv[1][0])
-        print(f"\n  {pa} / {pb}: {wa/wb:.2f}x wall, {ra/rb:.2f}x peak RSS"
-              if wb and rb else "")
+    if len(totals) > 1:
+        base, (wb, rb) = min(totals.items(), key=lambda kv: kv[1][0])
+        for profiler, (wall, rss) in sorted(totals.items(), key=lambda kv: -kv[1][0]):
+            if profiler != base and wb and rb:
+                print(f"\n  {profiler} / {base}: {wall/wb:.2f}x wall, {rss/rb:.2f}x peak RSS",
+                      end="")
+        print()
 
 
 def print_phase_table(rows):
@@ -308,6 +340,9 @@ def parse_args(argv=None):
                     help="comma-separated extra rule names to include in the "
                          "per-rule table (default: the profiler, setup and "
                          "shared rules this script knows about)")
+    ap.add_argument("--extra-benchmarks", default="",
+                    help="benchmarks dir to read rules from when the run has none "
+                         "for them, e.g. KrakenUniq reused from an earlier run")
     return ap.parse_args(argv)
 
 
@@ -321,15 +356,18 @@ def main(argv=None):
     extra = [r for r in args.rules.split(",") if r]
     wanted = profiler_rules + list(SETUP_RULES) + list(SHARED_RULES) + extra
 
+    bench_dirs = [bench_dir] + ([args.extra_benchmarks] if args.extra_benchmarks else [])
     summaries, missing = {}, []
     for rule in wanted:
-        s = summarise_rule(args.rundir, rule)
+        s = summarise_rule(bench_dirs, rule)
         if s:
             summaries[rule] = s
         else:
             missing.append(rule)
 
     print(f"Benchmarks under {os.path.abspath(bench_dir)}")
+    if args.extra_benchmarks:
+        print(f"  * from {os.path.abspath(args.extra_benchmarks)}")
     if missing:
         print(f"  (no benchmark files for: {', '.join(missing)})")
 

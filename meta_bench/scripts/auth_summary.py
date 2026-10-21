@@ -221,8 +221,13 @@ def accession_fp_reads(auth_dir, profiler, calls, scores):
 
 def profiler_sam_path(results_dir, profiler, sample):
     """The canonical SAM for a profiler+sample, mirroring aMeta's auth_alignment_sam."""
-    sub = "MALT" if profiler == "malt" else "ALIGNMENT"
-    return os.path.join(results_dir, sub, f"{sample}.trimmed.sam.gz")
+    name = f"{sample}.trimmed.sam.gz"
+    if profiler == "malt":
+        return os.path.join(results_dir, "MALT", name)
+    # results/ALIGNMENT/<aligner>/, or results/ALIGNMENT/ in single-aligner runs
+    per_aligner = os.path.join(results_dir, "ALIGNMENT", profiler, name)
+    return per_aligner if os.path.isfile(per_aligner) else os.path.join(
+        results_dir, "ALIGNMENT", name)
 
 
 def sam_header_labels(path):
