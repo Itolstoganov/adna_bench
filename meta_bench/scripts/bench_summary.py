@@ -56,12 +56,20 @@ PROFILER_STAGES = (
     ("strobealign", "taxonomic assignment", "NGSLCA/strobealign"),
     ("bowtie2", "alignment", "ALIGNMENT/bowtie2"),
     ("bowtie2", "taxonomic assignment", "NGSLCA/bowtie2"),
+    ("bwa_aln", "alignment", "ALIGNMENT/bwa_aln"),
+    ("bwa_aln", "taxonomic assignment", "NGSLCA/bwa_aln"),
 )
 # Flat layout of single-aligner runs from before per-aligner directories.
 LEGACY_RULES = {"ALIGNMENT/strobealign": "ALIGNMENT", "NGSLCA/strobealign": "NGSLCA"}
 # Paid once per database/binary, not per sample.
 SETUP_RULES = ("BUILD_MALT_DB", "COMPILE_STROBEALIGN", "REFERENCE_SUBSET",
-               "BOWTIE2_REFERENCE_INDEX")
+               "STROBEALIGN_INDEX", "BOWTIE2_INDEX", "BWA_INDEX")
+# Rules whose benchmark is not under benchmarks/<RULE>/, as globs relative to
+# benchmarks/. Bowtie2_Index writes next to the FASTA it indexes; only the
+# project reference's index is the profiler's (bowtie2_db is the pathogen screen).
+BENCHMARK_GLOBS = {
+    "BOWTIE2_INDEX": "../results/REFERENCE_DB/*_BOWTIE2_BUILD.benchmark.txt",
+}
 # Upstream of every profiler, so it differentiates none of them -- but it sets
 # the pipeline's real memory ceiling, so it is worth showing.
 SHARED_RULES = ("KRAKENUNIQ", "FILTER_KRAKENUNIQ_OUTPUT", "CUTADAPT_ADAPTER_TRIMMING")
@@ -74,7 +82,8 @@ PHASE_COLS = ["tool", "phase", "mean_s", "share_pct", "n", "note"]
 def read_benchmarks(bench_dir, rule):
     """Rows of every benchmark file for `rule`. A repeat() benchmark has several."""
     rows = []
-    for path in sorted(glob.glob(os.path.join(bench_dir, rule, "*.txt"))):
+    pattern = BENCHMARK_GLOBS.get(rule, os.path.join(rule, "*.txt"))
+    for path in sorted(glob.glob(os.path.join(bench_dir, pattern))):
         with open(path) as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 row["_job"] = os.path.basename(path).replace(".benchmark.txt", "")
@@ -176,7 +185,9 @@ def strobealign_log_phases(path):
         return float(m.group(1)) if m else 0.0
 
     return {
-        "index": grab("Total time indexing"),
+        # indexing on the fly, or loading an index written by Strobealign_Index
+        "index": grab("Total time indexing") or grab("Total time reading index"),
+        "prebuilt": "Total time reading index" in txt,
         "map": grab("Total time mapping"),
         "hits_cpu": grab("Total time finding hits (non-rescue mode)"),
         "chain_cpu": grab("Total time chaining (non-rescue mode)"),
@@ -227,7 +238,9 @@ def phase_rows(rundir):
     strobe = [s for s in strobe if s["index"] or s["map"]]
     if strobe:
         wall = stats.mean(s["index"] + s["map"] for s in strobe)
-        for label, key, note in [("build index over reference FASTA", "index", "wall"),
+        index_label = ("load prebuilt index" if all(s["prebuilt"] for s in strobe)
+                       else "build index over reference FASTA")
+        for label, key, note in [(index_label, "index", "wall"),
                                  ("mapping", "map", "wall, threaded")]:
             mean = stats.mean(s[key] for s in strobe)
             rows.append({"tool": "strobealign", "phase": label, "mean_s": mean,
@@ -245,7 +258,8 @@ def phase_rows(rundir):
     # bowtie2 logs no timings, so it only appears through its ngsLCA step
     for tool, patterns in [("ngsLCA", ["logs/NGSLCA/*.log"]),
                            ("ngsLCA (strobealign)", ["logs/NGSLCA/strobealign/*.log"]),
-                           ("ngsLCA (bowtie2)", ["logs/NGSLCA/bowtie2/*.log"])]:
+                           ("ngsLCA (bowtie2)", ["logs/NGSLCA/bowtie2/*.log"]),
+                           ("ngsLCA (bwa_aln)", ["logs/NGSLCA/bwa_aln/*.log"])]:
         lca = [t for t in map(ngslca_log_walltime, _logs(rundir, *patterns))
                if t is not None]
         if lca:

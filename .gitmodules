@@ -4,4 +4,4 @@
 [submodule "meta_bench/aMeta"]
 	path = meta_bench/aMeta
 	url = git@github.com:Itolstoganov/aMeta.git
-	branch = strobealign-benchmark
+	branch = bowtie2-profiler
