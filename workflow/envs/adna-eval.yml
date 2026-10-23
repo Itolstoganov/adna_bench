@@ -12,6 +12,7 @@ dependencies:
   - pysam
   - dnaio
   - bwa
+  - bowtie2
   - samtools
   - cmake=3.27
   - cxx-compiler

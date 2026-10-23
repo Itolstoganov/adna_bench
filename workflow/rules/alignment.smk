@@ -190,6 +190,62 @@ rule bwa_mem_k_single_end:
         "\n mv -v {log}.tmp {log}"
 
 
+# Map reads with bowtie2
+
+rule bowtie2_index:
+    output:
+        multiext("{genome}.fa", ".1.bt2", ".2.bt2", ".3.bt2", ".4.bt2", ".rev.1.bt2", ".rev.2.bt2")
+    input: "{genome}.fa"
+    threads: 8
+    shell:
+        "bowtie2-build --threads {threads} {input} {input}"
+
+
+rule bowtie2_paired_end:
+    output:
+        bam="runs/bowtie2/{dataset_id}/pe.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.1.bt2",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz"
+    params:
+        opt="--local --very-sensitive-local"
+    threads: 8
+    log:
+        "runs/bowtie2/{dataset_id}/pe.bam.log"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bowtie2 -p {threads} {params.opt} -x {input.fasta}"
+        " -1 {input.r1_fastq} -2 {input.r2_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
+rule bowtie2_single_end:
+    output:
+        bam="runs/bowtie2/{dataset_id}/se.bam"
+    input:
+        fasta="datasets/{dataset_id}/ref.fa",
+        index="datasets/{dataset_id}/ref.fa.1.bt2",
+        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+    params:
+        opt="--local --very-sensitive-local"
+    threads: 8
+    log:
+        "runs/bowtie2/{dataset_id}/se.bam.log"
+    shell:
+        "cat {input} > /dev/null; "
+        "/usr/bin/time -v bowtie2 -p {threads} {params.opt} -x {input.fasta}"
+        " -U {input.r1_fastq} 2> {log}.tmp"
+        " | grep -v '^@PG'"
+        " | samtools view --no-PG -o {output.bam}.tmp.bam -"
+        "\n mv -v {output.bam}.tmp.bam {output.bam}"
+        "\n mv -v {log}.tmp {log}"
+
+
 # Map reads with strobealign
 
 # rule compile_strobealign:
