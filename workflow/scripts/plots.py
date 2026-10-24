@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import re
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -66,13 +67,41 @@ def k_eq(k):
 
 # --- helpers -----------------------------------------------------------------
 
+MARKERS = ["o", "s", "^", "D", "v", "P", "X", "<", ">", "*"]
+
+# Canonical tool order (from the config, via --tool) that pins each tool to the
+# same color and marker in every plot, whichever subset of tools a plot shows.
+TOOL_ORDER = []
+
+
+def _tool_key(name):
+    return re.sub(r" \(k=\d+\)$", "", str(name))
+
+
+def _style_slots(names):
+    """Map each name to a style slot: its position in TOOL_ORDER, or, for tools
+    missing from it, the next free slots in order of appearance."""
+    slots = {}
+    extra = len(TOOL_ORDER)
+    for n in dict.fromkeys(names):
+        key = _tool_key(n)
+        if key in TOOL_ORDER:
+            slots[n] = TOOL_ORDER.index(key)
+        else:
+            slots[n] = extra
+            extra += 1
+    return slots
+
+
 def _palette(names):
-    """Stable tab10 color mapping for a list of (possibly duplicated) names."""
-    seen = []
-    for n in names:
-        if n not in seen:
-            seen.append(n)
-    return dict(zip(seen, sns.color_palette("tab10", n_colors=len(seen))))
+    """Tool -> tab10 color, pinned by TOOL_ORDER."""
+    colors = sns.color_palette("tab10", n_colors=10)
+    return {n: colors[i % len(colors)] for n, i in _style_slots(names).items()}
+
+
+def _markers(names):
+    """Tool -> marker, pinned by TOOL_ORDER."""
+    return {n: MARKERS[i % len(MARKERS)] for n, i in _style_slots(names).items()}
 
 
 def _split_baseline(df, x, baseline):
@@ -124,11 +153,15 @@ def plot_xy(df, x, y, *, output_path=None, pdf=None, filter=None,
     names = list(varying[hue].unique()) if hue else []
     names += list(base[baseline_hue].unique())
     palette = _palette(names) if names else None
+    markers = _markers(names) if names else None
 
     plt.figure(figsize=(10, 6))
     if not varying.empty:
-        sns.lineplot(data=varying, x=x, y=y,
-                     hue=hue if hue else None, palette=palette, marker="o")
+        if hue:
+            sns.lineplot(data=varying, x=x, y=y, hue=hue, palette=palette,
+                         style=hue, markers=markers, dashes=False)
+        else:
+            sns.lineplot(data=varying, x=x, y=y, marker="o")
         plt.xticks(sorted(varying[x].unique()))
 
     for _, r in base.iterrows():
@@ -170,7 +203,9 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
         if name not in display_order:
             display_order.append(name)
     palette = _palette(display_order)
+    markers = _markers(display_order)
     base_displays = set(base_df[hue].unique())
+    dashes = {d: (4, 2) if d in base_displays else "" for d in display_order}
 
     facet_kwargs = {}
     if row is not None:
@@ -184,8 +219,8 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
         data=plot_df,
         x=x, y=y,
         hue=hue, hue_order=display_order, palette=palette,
-        style="k_aware", style_order=[True, False],
-        kind="line", marker="o",
+        style=hue, style_order=display_order, markers=markers, dashes=dashes,
+        kind="line",
         facet_kws={"sharey": False, "legend_out": True},
         legend=False,
         **facet_kwargs,
@@ -202,7 +237,7 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
             [], [],
             color=palette[display],
             linestyle="-" if k_aware else "--",
-            marker="o" if k_aware else "",
+            marker=markers[display],
         ))
     g.figure.legend(
         handles, display_order, title="Tool",
@@ -370,6 +405,7 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
         return
     names = list(dict.fromkeys(sub["Display"]))
     palette = _palette(names)
+    markers = _markers(names)
     plt.figure(figsize=(max(10, len(dataset_order) * 1.2), 6))
     if delta_baseline is not None:
         plt.axhline(0, color="gray", linewidth=0.8, linestyle="--")
@@ -377,7 +413,7 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
         plt.axhline(1, color="gray", linewidth=0.8, linestyle="--")
     sns.pointplot(data=sub, x=x, y=y, hue="Display",
                   order=dataset_order, hue_order=names, palette=palette,
-                  errorbar=None)
+                  markers=[markers[n] for n in names], errorbar=None)
     label = _summary_label(y)
     if delta_baseline is not None:
         ylabel = f"Δ {label} (vs {delta_baseline})"
@@ -664,6 +700,7 @@ def plot_reference_lines(df, y, variation_order, *, pdf=None, png_path=None,
     references = list(dict.fromkeys(df["reference"]))
     tools = list(dict.fromkeys(df["Display"]))
     palette = _palette(tools)
+    markers = _markers(tools)
 
     fig, axes = _reference_axes(references, sharey=sharey)
     for ax, reference in zip(axes, references):
@@ -673,12 +710,13 @@ def plot_reference_lines(df, y, variation_order, *, pdf=None, png_path=None,
             ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
         sns.pointplot(data=ref_df, x="variation", y=y, hue="Display",
                       order=levels, hue_order=tools, palette=palette,
-                      errorbar=None, ax=ax, legend=False)
+                      markers=[markers[t] for t in tools], errorbar=None, ax=ax,
+                      legend=False)
         ax.set_title(reference)
         ax.set_xlabel("Variation")
         ax.set_ylabel(y)
         ax.yaxis.set_tick_params(labelleft=True)
-    handles = [Line2D([], [], color=palette[t], marker="o") for t in tools]
+    handles = [Line2D([], [], color=palette[t], marker=markers[t]) for t in tools]
     fig.legend(handles, tools, title="Tool", loc="center left",
                bbox_to_anchor=(1.0, 0.5), frameon=False)
     fig.suptitle(title if title is not None else y)
@@ -745,7 +783,11 @@ def main():
                         help="Dataset name, accuracy table path, resource table "
                              "path, genome, read length, variation, ground truth "
                              "BED (repeatable, used with --summary-pdf).")
+    parser.add_argument("--tool", action="append", default=[], dest="tools",
+                        help="Tool name in canonical order (repeatable); pins "
+                             "colors and markers across plots.")
     args = parser.parse_args()
+    TOOL_ORDER.extend(args.tools)
 
     if args.combined_pdf:
         if not args.dataset:

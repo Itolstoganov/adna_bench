@@ -1,3 +1,4 @@
+import shlex
 from itertools import product
 
 configfile: "configs/config.yaml"
@@ -59,6 +60,15 @@ if config["programs"]:
         else:
             PROGRAMS.append(prog)
 PLOTS = ("accuracy", "aligned", "time", "memory")
+
+# Canonical tool order passed to plots.py so every plot uses the same color and
+# marker for a tool.
+TOOL_ORDER = list(dict.fromkeys(
+    [v["base_name"] for v in VERSIONS.values()]
+    + [info["base_name"] for info in BWAMEM_K_PROGRAMS.values()]
+    + [p for p in config.get("programs", []) if not (p == "bwamem" and BWAMEM_K_PROGRAMS)]
+))
+TOOL_ARGS = " ".join(shlex.quote(f"--tool={name}") for name in TOOL_ORDER)
 
 
 ACCURACY_METRICS = [
@@ -258,9 +268,10 @@ rule plots:
         accuracy="result/{dataset_id}/accuracy_table.tsv",
         resources="result/{dataset_id}/resource_table.tsv"
     params:
-        k=config.get("main_k", 17)
+        k=config.get("main_k", 17),
+        tool_args=TOOL_ARGS
     shell:
-        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k {params.k}"
+        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k {params.k} {params.tool_args}"
 
 
 rule k_plots:
@@ -270,9 +281,10 @@ rule k_plots:
         accuracy="result/{dataset_id}/accuracy_table.tsv",
         resources="result/{dataset_id}/resource_table.tsv"
     params:
-        threshold=config.get("main_score_threshold", 60)
+        threshold=config.get("main_score_threshold", 60),
+        tool_args=TOOL_ARGS
     shell:
-        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold}"
+        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold} {params.tool_args}"
 
 
 def _combined_dataset_label(dataset_id):
@@ -289,12 +301,13 @@ rule combined_k_plots:
         resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS)
     params:
         threshold=config.get("main_score_threshold", 60),
+        tool_args=TOOL_ARGS,
         dataset_args=lambda wildcards, input: " ".join(
             f"--dataset {d} {acc} {res} {_combined_dataset_label(d)} {DATASET_CONFIGS[d]['endogenous_variation']}"
             for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
         )
     shell:
-        "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args}"
+        "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args} {params.tool_args}"
 
 
 def _summary_dataset_arg(dataset_id, acc, res, gt):
@@ -320,12 +333,13 @@ rule summary_plots:
         threshold=config.get("main_score_threshold", 60),
         main_k=config.get("main_k", 17),
         num_reads=config.get("num_reads"),
+        tool_args=TOOL_ARGS,
         dataset_args=lambda wildcards, input: " ".join(
             _summary_dataset_arg(d, acc, res, gt)
             for d, acc, res, gt in zip(DATASET_IDS, input.accuracy, input.resources, input.ground_truth)
         )
     shell:
-        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.dataset_args}"
+        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.dataset_args} {params.tool_args}"
 
 
 def index_log(wildcards):
