@@ -6,7 +6,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, accuracy_tables, resource_tables, k_plots, combined_k_plots, summary_plots
+    plots, resources, index_resources, accuracy_tables, resource_tables, k_plots, combined_k_plots, summary_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -113,6 +113,9 @@ SCORE_THRESHOLDS = config.get("score_thresholds", [25, 30, 35, 40, 45])
 HAS_MULTI_K = len(k_values) > 1
 K_PLOT_METRICS = ["k_" + m for m in PLOT_METRICS] + RESOURCE_K_METRICS
 
+# Index construction resources, plotted with references (endogenous genomes) on the x axis.
+INDEX_METRICS = ["index_runtime", "index_memory"]
+
 # Summary plots (all datasets, one plot per metric): absolute accuracy metrics,
 # their delta-vs-default counterparts, and the two resource metrics.
 SUMMARY_PNG_METRICS = (
@@ -120,6 +123,8 @@ SUMMARY_PNG_METRICS = (
     + [m + "_delta" for m in PLOT_METRICS]
     + RESOURCE_K_METRICS
     + ["k_memory_delta"]
+    + INDEX_METRICS
+    + ["outcome", "outcome_deam", "accuracy_deam_diff"]
 )
 
 rule final:
@@ -205,7 +210,8 @@ rule resource_tables:
     output:
         "result/{dataset_id}/resource_table.tsv"
     input:
-        expand("csv/{prog}/{{dataset_id}}/se.bam.resources.csv", prog=PROGRAMS)
+        res=expand("csv/{prog}/{{dataset_id}}/se.bam.resources.csv", prog=PROGRAMS),
+        index=expand("csv/{prog}/{{dataset_id}}/index.resources.csv", prog=PROGRAMS)
     params:
         programs=PROGRAMS
     run:
@@ -230,15 +236,19 @@ rule resource_tables:
 
         with open(output[0], 'w', newline='') as outfile:
             writer = csv.writer(outfile, delimiter='\t')
-            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)", "Peak Memory (GB)"])
+            writer.writerow(["Tool", "Base Name", "k", "Mapping Time (s)", "Peak Memory (GB)",
+                             "Index Time (s)", "Index Peak Memory (GB)"])
 
-            for prog, res_file in zip(params.programs, input):
+            for prog, res_file, index_file in zip(params.programs, input.res, input.index):
                 info = tool_info.get(prog, {"name": prog, "base_name": "", "k": ""})
                 with open(res_file) as f:
                     row = next(csv.DictReader(f))
+                with open(index_file) as f:
+                    index_row = next(csv.DictReader(f))
                 mapping_time = row.get("mapping_time", "")
                 memory = row.get("memory_gb", "")
-                writer.writerow([info["name"], info["base_name"], info["k"], mapping_time, memory])
+                writer.writerow([info["name"], info["base_name"], info["k"], mapping_time, memory,
+                                 index_row["index_time"], index_row["index_memory_gb"]])
 
 
 rule plots:
@@ -287,13 +297,14 @@ rule combined_k_plots:
         "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args}"
 
 
-def _summary_dataset_arg(dataset_id, acc, res):
-    """Build a --summary-dataset argument: name, table paths, and the components
-    used to derive the shortened dataset label (genome, read length, variation)."""
+def _summary_dataset_arg(dataset_id, acc, res, gt):
+    """Build a --summary-dataset argument: name, table paths, the components
+    used to derive the shortened dataset label (genome, read length, variation),
+    and the ground truth BED (for the deaminated read fraction)."""
     cfg = DATASET_CONFIGS[dataset_id]
     return (
         f"--summary-dataset {dataset_id} {acc} {res} "
-        f"{cfg['endogenous_genome']} {cfg['read_length']} {cfg['endogenous_variation']}"
+        f"{cfg['endogenous_genome']} {cfg['read_length']} {cfg['endogenous_variation']} {gt}"
     )
 
 
@@ -303,17 +314,68 @@ rule summary_plots:
         pngs=expand("result/summary_plots/{metric}.png", metric=SUMMARY_PNG_METRICS)
     input:
         accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
-        resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS)
+        resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
+        ground_truth=expand("datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS)
     params:
         threshold=config.get("main_score_threshold", 60),
         main_k=config.get("main_k", 17),
         num_reads=config.get("num_reads"),
         dataset_args=lambda wildcards, input: " ".join(
-            _summary_dataset_arg(d, acc, res)
-            for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
+            _summary_dataset_arg(d, acc, res, gt)
+            for d, acc, res, gt in zip(DATASET_IDS, input.accuracy, input.resources, input.ground_truth)
         )
     shell:
         "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.dataset_args}"
+
+
+def index_log(wildcards):
+    """Log holding the index construction measurements for a program, if any."""
+    prog, dataset_id = wildcards.prog, wildcards.dataset_id
+    if prog in ("bwaaln", "bwamem") or prog in BWAMEM_K_PROGRAMS:
+        return f"datasets/{dataset_id}/ref.fa.bwa_index.log"
+    if prog == "bowtie2":
+        return f"datasets/{dataset_id}/ref.fa.bowtie2_index.log"
+    if prog == "safari":
+        return f"datasets/{dataset_id}/safari/ref.index.log"
+    if prog.startswith("strobealign-"):
+        # strobealign indexes on the fly; only its indexing time is reported separately
+        return f"runs/{prog}/{dataset_id}/se.bam.log"
+    return []
+
+
+def _parse_wall_clock(value):
+    seconds = 0.0
+    for part in value.split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
+rule index_resources:
+    output:
+        csv="csv/{prog}/{dataset_id}/index.resources.csv"
+    input:
+        log=index_log
+    run:
+        index_time = ""
+        memory = ""
+        if input.log:
+            with open(input.log) as f:
+                lines = f.readlines()
+            if wildcards.prog.startswith("strobealign-"):
+                times = [float(l.split()[3]) for l in lines if l.startswith("Total time indexing:")]
+                if times:
+                    index_time = times[0]
+            else:
+                # multi-step indexers (safari) log one `time -v` block per step
+                times = [_parse_wall_clock(l.split()[-1]) for l in lines if "Elapsed (wall clock)" in l]
+                rss = [int(l.split()[-1]) for l in lines if "Maximum resident" in l]
+                if times:
+                    index_time = sum(times)
+                if rss:
+                    memory = max(rss) / 1048576
+        with open(output.csv, "w") as f:
+            f.write("prog,index_time,index_memory_gb\n")
+            f.write(f"{wildcards.prog},{index_time},{memory}\n")
 
 
 rule resources:

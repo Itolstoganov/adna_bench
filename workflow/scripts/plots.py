@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from pathlib import Path
 
 METRICS = [
@@ -349,8 +350,9 @@ def _apply_baseline(df, y, baseline, op):
 
 def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
                         title=None, delta_baseline=None, ratio_baseline=None,
-                        log_y=False):
-    """Point/line plot of metric `y` with datasets on the x axis, one line per tool.
+                        log_y=False, x="dataset", xlabel="Dataset"):
+    """Point/line plot of metric `y` with datasets (or column `x`) on the x axis,
+    one line per tool.
 
     When `delta_baseline` is set, values are plotted as the difference to that
     tool (a dashed line marks zero); when `ratio_baseline` is set, as the ratio to
@@ -373,7 +375,7 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
         plt.axhline(0, color="gray", linewidth=0.8, linestyle="--")
     elif ratio_baseline is not None:
         plt.axhline(1, color="gray", linewidth=0.8, linestyle="--")
-    sns.pointplot(data=sub, x="dataset", y=y, hue="Display",
+    sns.pointplot(data=sub, x=x, y=y, hue="Display",
                   order=dataset_order, hue_order=names, palette=palette,
                   errorbar=None)
     label = _summary_label(y)
@@ -385,7 +387,7 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
         ylabel = label
     if log_y:
         plt.yscale("log")
-    plt.xlabel("Dataset")
+    plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.title(title if title is not None else y)
     plt.xticks(rotation=45, ha="right")
@@ -400,14 +402,26 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
 
 def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
                      png_dir=None, num_reads=None):
-    # summary_inputs: list of (NAME, ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION)
+    # summary_inputs: list of (NAME, ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION, GT_PATH)
     short_names = _build_short_names(
-        [(genome, read_len, var) for _n, _a, _r, genome, read_len, var in summary_inputs]
+        [(genome, read_len, var) for _n, _a, _r, genome, read_len, var, _gt in summary_inputs]
     )
     dataset_order = list(dict.fromkeys(short_names))
+    genome_by_dataset = {
+        short: genome
+        for (_n, _a, _r, genome, _rl, _v, _gt), short in zip(summary_inputs, short_names)
+    }
     read_len_by_dataset = {
         short: float(read_len)
-        for (_n, _a, _r, _g, read_len, _v), short in zip(summary_inputs, short_names)
+        for (_n, _a, _r, _g, read_len, _v, _gt), short in zip(summary_inputs, short_names)
+    }
+    variation_by_dataset = {
+        short: _variation_label(var)
+        for (_n, _a, _r, _g, _rl, var, _gt), short in zip(summary_inputs, short_names)
+    }
+    deam_fraction_by_dataset = {
+        short: count_deaminated_fraction(gt)
+        for (_n, _a, _r, _g, _rl, _v, gt), short in zip(summary_inputs, short_names)
     }
     acc_df = _build_summary_frame(
         [(acc, short) for (_n, acc, _r, *_), short in zip(summary_inputs, short_names)],
@@ -427,6 +441,14 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
     def png_path(slug):
         return png_dir / f"{slug}.png" if png_dir is not None else None
 
+    variation_order = sorted(set(variation_by_dataset.values()), key=_variation_sort_key)
+
+    def with_reference_columns(df):
+        df = df.copy()
+        df["reference"] = df["dataset"].map(genome_by_dataset)
+        df["variation"] = df["dataset"].map(variation_by_dataset)
+        return df
+
     with PdfPages(output_path) as pdf:
         if acc_df is not None and not acc_df.empty:
             # absolute values
@@ -442,20 +464,22 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
                     title=f"{_summary_label(metric_col)} (Δ vs {SUMMARY_DELTA_BASELINE})",
                     delta_baseline=SUMMARY_DELTA_BASELINE)
         if res_df is not None and not res_df.empty:
-            # runtime normalised per processed base: total reads (config) x read
-            # length (per dataset). Falls back to total time if num_reads is unset.
+            # runtime normalised per processed megabase: total reads (config) x
+            # read length (per dataset). Falls back to total time if num_reads is unset.
             runtime_col = "Mapping Time (s)"
             runtime_title = "Mapping Time"
             if num_reads:
                 res_df = res_df.copy()
                 read_len = res_df["dataset"].map(read_len_by_dataset)
-                res_df["Runtime per base (s)"] = (
-                    res_df["Mapping Time (s)"] / (num_reads * read_len)
+                res_df["Runtime per Mbp (s)"] = (
+                    res_df["Mapping Time (s)"] / (num_reads * read_len / 1e6)
                 )
-                runtime_col = "Runtime per base (s)"
-                runtime_title = "Runtime per base"
-            plot_summary_metric(res_df, runtime_col, dataset_order, pdf=pdf,
-                                png_path=png_path("k_runtime"), title=runtime_title)
+                runtime_col = "Runtime per Mbp (s)"
+                runtime_title = "Runtime per Mbp"
+            plot_reference_lines(with_reference_columns(res_df), runtime_col,
+                                 variation_order, pdf=pdf,
+                                 png_path=png_path("k_runtime"), title=runtime_title,
+                                 sharey=False)
             # absolute peak memory
             plot_summary_metric(res_df, "Peak Memory (GB)", dataset_order, pdf=pdf,
                                 png_path=png_path("k_memory"), title="Peak Memory")
@@ -465,6 +489,227 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
                 png_path=png_path("k_memory_delta"),
                 title=f"Peak Memory (relative to {SUMMARY_DELTA_BASELINE})",
                 ratio_baseline=SUMMARY_DELTA_BASELINE, log_y=True)
+            plot_index_metrics(res_df, genome_by_dataset, pdf=pdf, png_path=png_path)
+        if acc_df is not None and not acc_df.empty:
+            acc_df = with_reference_columns(acc_df)
+            plot_outcome_bars(acc_df, "% Accuracy (endogenous only)",
+                              "% Mapped endogenous reads", variation_order,
+                              pdf=pdf, png_path=png_path("outcome"),
+                              title="Mapping accuracy")
+            plot_outcome_bars(acc_df, "% Accuracy (deaminated endogenous only)",
+                              "% Mapped deaminated endogenous reads", variation_order,
+                              pdf=pdf, png_path=png_path("outcome_deam"),
+                              title="Mapping accuracy (deaminated reads)")
+            acc_df["deam_fraction"] = acc_df["dataset"].map(deam_fraction_by_dataset)
+            plot_deam_accuracy_diff(acc_df, variation_order, pdf=pdf,
+                                    png_path=png_path("accuracy_deam_diff"))
+
+
+def _variation_label(variation):
+    """`var0p1` -> `0.1%`; unrecognised values are returned unchanged."""
+    try:
+        return f"{float(str(variation).removeprefix('var').replace('p', '.')):g}%"
+    except ValueError:
+        return str(variation)
+
+
+def _variation_sort_key(label):
+    try:
+        return (0, float(label.removesuffix("%")), label)
+    except ValueError:
+        return (1, 0.0, label)
+
+
+def count_deaminated_fraction(gt_path):
+    """Fraction of endogenous reads in the ground truth that carry deamination."""
+    endo = deam = 0
+    with open(gt_path) as fh:
+        for line in fh:
+            name = line.split("\t", 4)[3]
+            origin = name.split(":", 4)[4].split("_DEAM:", 1)[0].lstrip("0123456789")
+            if origin.startswith("e"):
+                endo += 1
+                deam += "_DEAM:" in name
+    return deam / endo if endo else float("nan")
+
+
+def _reference_axes(references, *, sharey, height=5.5):
+    fig, axes = plt.subplots(1, len(references), figsize=(6 * len(references), height),
+                             sharey=sharey, squeeze=False)
+    return fig, axes[0]
+
+
+def _save_summary_figure(fig, pdf, png_path):
+    fig.tight_layout()
+    if pdf is not None:
+        pdf.savefig(fig, bbox_inches="tight")
+    if png_path is not None:
+        fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_outcome_bars(df, correct_col, mapped_col, variation_order, *, pdf=None,
+                      png_path=None, title=None):
+    """Stacked correct / incorrect / unmapped bars in a single panel: variation
+    levels grouped by reference on the x axis, one bar per tool within each level."""
+    if correct_col not in df.columns or mapped_col not in df.columns:
+        return
+    df = df[df[correct_col].notna() & df[mapped_col].notna()]
+    if df.empty:
+        return
+    references = list(dict.fromkeys(df["reference"]))
+    tools = list(dict.fromkeys(df["Display"]))
+    palette = _palette(tools)
+    bar_width = 0.8 / len(tools)
+
+    groups = []
+    for reference in references:
+        present = set(df.loc[df["reference"] == reference, "variation"])
+        groups.append((reference, [v for v in variation_order if v in present]))
+    reference_gap = 0.6
+    centers, labels, spans = [], [], []
+    x = 0.0
+    for reference, levels in groups:
+        first = x
+        for level in levels:
+            centers.append(x)
+            labels.append((reference, level))
+            x += 1
+        spans.append((reference, first, x - 1))
+        x += reference_gap
+
+    fig, ax = plt.subplots(figsize=(max(12, 0.42 * len(centers) * len(tools)), 4))
+    for i, tool in enumerate(tools):
+        rows = df[df["Display"] == tool].set_index(["reference", "variation"])
+        xs, correct, incorrect, unmapped = [], [], [], []
+        for center, key in zip(centers, labels):
+            if key not in rows.index:
+                continue
+            r = rows.loc[key]
+            xs.append(center - 0.4 + bar_width * (i + 0.5))
+            correct.append(r[correct_col])
+            incorrect.append(r[mapped_col] - r[correct_col])
+            unmapped.append(100 - r[mapped_col])
+        color = palette[tool]
+        ax.bar(xs, correct, bar_width * 0.9, color=color, edgecolor="white", linewidth=0.5)
+        ax.bar(xs, incorrect, bar_width * 0.9, bottom=correct, color=color, alpha=0.4,
+               hatch="///", edgecolor="white", linewidth=0.5)
+        ax.bar(xs, unmapped, bar_width * 0.9,
+               bottom=[c + w for c, w in zip(correct, incorrect)],
+               color="#e5e7eb", edgecolor="white", linewidth=0.5)
+        for bx, c, w in zip(xs, correct, incorrect):
+            ax.text(bx, 101, f"{c:.1f}", ha="center", va="bottom", fontsize=6.5)
+            ax.text(bx, 107, f"{c + w:.1f}", ha="center", va="bottom", fontsize=6.5,
+                    color="#6b7280")
+    ax.set_xticks(centers)
+    ax.set_xticklabels([level for _ref, level in labels])
+    ax.set_xlim(centers[0] - 0.5, centers[-1] + 0.5)
+    for (_ref, _first, last), (_next, next_first, _l) in zip(spans, spans[1:]):
+        ax.axvline((last + next_first) / 2, color="#9ca3af", linewidth=0.8)
+    for reference, first, last in spans:
+        ax.text((first + last) / 2, -0.12, reference, transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=11, fontweight="bold")
+    ax.set_ylim(0, 115)
+    ax.set_yticks(range(0, 101, 20))
+    ax.set_ylabel("Reads (%)")
+    ax.spines[["top", "right"]].set_visible(False)
+
+    tool_handles = [Patch(facecolor=palette[t]) for t in tools]
+    outcome_handles = [
+        Patch(facecolor="#6b7280"),
+        Patch(facecolor="#6b7280", alpha=0.4, hatch="///", edgecolor="white"),
+        Patch(facecolor="#e5e7eb"),
+    ]
+    tool_legend = fig.legend(tool_handles, tools, title="Tool", loc="center left",
+                             bbox_to_anchor=(1.0, 0.5), frameon=False)
+    fig.add_artist(tool_legend)
+    fig.legend(outcome_handles, ["Correct", "Incorrect", "Unmapped"],
+               title="Mapping outcome", loc="upper center", bbox_to_anchor=(0.5, -0.02),
+               ncol=3, frameon=False)
+    fig.suptitle(title if title is not None else correct_col)
+    _save_summary_figure(fig, pdf, png_path)
+
+
+def plot_deam_accuracy_diff(df, variation_order, *, pdf=None, png_path=None):
+    """Accuracy on deaminated minus accuracy on non-deaminated endogenous reads,
+    one panel per reference with variation levels on the x axis.
+
+    Non-deaminated accuracy is recovered from the overall and deaminated
+    accuracies using the fraction `f` of deaminated endogenous reads:
+    acc_nondeam = (acc_all - f * acc_deam) / (1 - f).
+    """
+    all_col = "% Accuracy (endogenous only)"
+    deam_col = "% Accuracy (deaminated endogenous only)"
+    if all_col not in df.columns or deam_col not in df.columns:
+        return
+    df = df.copy()
+    f = df["deam_fraction"]
+    nondeam = (df[all_col] - f * df[deam_col]) / (1 - f)
+    y = "Δ % Accuracy (deaminated − non-deaminated)"
+    df[y] = df[deam_col] - nondeam
+    plot_reference_lines(df, y, variation_order, pdf=pdf, png_path=png_path,
+                         title="Accuracy difference: deaminated vs non-deaminated reads",
+                         zero_line=True)
+
+
+def plot_reference_lines(df, y, variation_order, *, pdf=None, png_path=None,
+                         title=None, zero_line=False, sharey=True):
+    """Point/line plot of `y`, one panel per reference, variation levels on the
+    x axis and one line per tool."""
+    if y not in df.columns:
+        return
+    df = df[df[y].notna()]
+    if df.empty:
+        return
+    references = list(dict.fromkeys(df["reference"]))
+    tools = list(dict.fromkeys(df["Display"]))
+    palette = _palette(tools)
+
+    fig, axes = _reference_axes(references, sharey=sharey)
+    for ax, reference in zip(axes, references):
+        ref_df = df[df["reference"] == reference]
+        levels = [v for v in variation_order if v in set(ref_df["variation"])]
+        if zero_line:
+            ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        sns.pointplot(data=ref_df, x="variation", y=y, hue="Display",
+                      order=levels, hue_order=tools, palette=palette,
+                      errorbar=None, ax=ax, legend=False)
+        ax.set_title(reference)
+        ax.set_xlabel("Variation")
+        ax.set_ylabel(y)
+        ax.yaxis.set_tick_params(labelleft=True)
+    handles = [Line2D([], [], color=palette[t], marker="o") for t in tools]
+    fig.legend(handles, tools, title="Tool", loc="center left",
+               bbox_to_anchor=(1.0, 0.5), frameon=False)
+    fig.suptitle(title if title is not None else y)
+    _save_summary_figure(fig, pdf, png_path)
+
+
+# Index construction metrics: column, file slug, plot title.
+INDEX_METRICS = [
+    ("Index Time (s)", "index_runtime", "Index Construction Time"),
+    ("Index Peak Memory (GB)", "index_memory", "Index Construction Peak Memory"),
+]
+
+
+def plot_index_metrics(res_df, genome_by_dataset, *, pdf=None, png_path=None):
+    """Index time/memory with references on the x axis.
+
+    The index depends only on the reference, so datasets sharing a reference
+    (differing in variation or read length) are collapsed to their median.
+    """
+    columns = [col for col, _slug, _title in INDEX_METRICS if col in res_df.columns]
+    if not columns:
+        return
+    df = res_df.copy()
+    df["reference"] = df["dataset"].map(genome_by_dataset)
+    df = df.groupby(["reference", "Display"], as_index=False, sort=False)[columns].median()
+    reference_order = list(dict.fromkeys(genome_by_dataset.values()))
+    for col, slug, title in INDEX_METRICS:
+        if col in columns:
+            plot_summary_metric(df, col, reference_order, pdf=pdf,
+                                png_path=png_path(slug), title=title,
+                                x="reference", xlabel="Reference")
 
 
 def main():
@@ -494,12 +739,12 @@ def main():
     parser.add_argument("--num-reads", type=int,
                         help="Total reads per dataset (config); enables runtime-"
                              "per-base in the summary plots.")
-    parser.add_argument("--summary-dataset", nargs=6, action="append", default=[],
+    parser.add_argument("--summary-dataset", nargs=7, action="append", default=[],
                         metavar=("NAME", "ACC_PATH", "RES_PATH", "GENOME",
-                                 "READ_LEN", "VARIATION"),
+                                 "READ_LEN", "VARIATION", "GT_PATH"),
                         help="Dataset name, accuracy table path, resource table "
-                             "path, genome, read length, variation (repeatable, "
-                             "used with --summary-pdf).")
+                             "path, genome, read length, variation, ground truth "
+                             "BED (repeatable, used with --summary-pdf).")
     args = parser.parse_args()
 
     if args.combined_pdf:

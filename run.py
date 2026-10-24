@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 
-def run_snakemake(snakefile, config, cores=None, slurm=False, secondary_accuracy=False):
+def run_snakemake(snakefile, config, cores=None, slurm=False, secondary_accuracy=False, dry_run=False):
     cmd = ["snakemake", "-s", snakefile, "--use-singularity", "--configfile", config]
 
     if slurm:
@@ -15,6 +15,9 @@ def run_snakemake(snakefile, config, cores=None, slurm=False, secondary_accuracy
 
     if secondary_accuracy:
         cmd.extend(["--config", "secondary_accuracy=True"])
+
+    if dry_run:
+        cmd.append("--dry-run")
 
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd)
@@ -30,6 +33,7 @@ def main():
     parser.add_argument("--cores", type=int, default=4, help="Number of cores (default: 4, ignored with --slurm)")
     parser.add_argument("--slurm", action="store_true", help="Use SLURM profile instead of local execution")
     parser.add_argument("--secondary-accuracy", action="store_true", help="Enable the (costly) secondary-alignment accuracy metric")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Only show which jobs would run (snakemake --dry-run)")
     args = parser.parse_args()
 
     config = "configs/config_test.yaml" if args.test else "configs/config.yaml"
@@ -44,12 +48,12 @@ def main():
 
     if run_simulate:
         print("Running simulation...")
-        run_snakemake("workflow/Simulation.snake", config, args.cores, args.slurm)
+        run_snakemake("workflow/Simulation.snake", config, args.cores, args.slurm, dry_run=args.dry_run)
 
     if run_benchmark:
         print("Running benchmark...")
         run_snakemake("workflow/Benchmark.snake", config, args.cores, args.slurm,
-                      secondary_accuracy=args.secondary_accuracy)
+                      secondary_accuracy=args.secondary_accuracy, dry_run=args.dry_run)
 
     print("Done!")
 

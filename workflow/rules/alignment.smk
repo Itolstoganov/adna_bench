@@ -46,10 +46,11 @@ rule bwa_index:
         "{genome}.fa.ann",
         "{genome}.fa.bwt",
         "{genome}.fa.pac",
-        "{genome}.fa.sa"
+        "{genome}.fa.sa",
+        time="{genome}.fa.bwa_index.log"
     input: "{genome}.fa"
     shell:
-        "bwa index {input}"
+        "/usr/bin/time -v bwa index {input} 2> {output.time}"
 
 # Fix runtime measurements
 rule bwa_aln_paired_end:
@@ -194,11 +195,12 @@ rule bwa_mem_k_single_end:
 
 rule bowtie2_index:
     output:
-        multiext("{genome}.fa", ".1.bt2", ".2.bt2", ".3.bt2", ".4.bt2", ".rev.1.bt2", ".rev.2.bt2")
+        multiext("{genome}.fa", ".1.bt2", ".2.bt2", ".3.bt2", ".4.bt2", ".rev.1.bt2", ".rev.2.bt2"),
+        time="{genome}.fa.bowtie2_index.log"
     input: "{genome}.fa"
     threads: 8
     shell:
-        "bowtie2-build --threads {threads} {input} {input}"
+        "/usr/bin/time -v bowtie2-build --threads {threads} {input} {input} > {output.time} 2>&1"
 
 
 rule bowtie2_paired_end:
@@ -337,7 +339,6 @@ rule safari_install:
 
 rule safari_index_linear:
     #todo are all these really necessary
-    #todo add runtime/mem?
     input:
         safari="bin/safari/vg",
         fasta="datasets/{dataset_id}/ref.fa"
@@ -351,20 +352,23 @@ rule safari_index_linear:
         gg="datasets/{dataset_id}/safari/ref.gg",
         gbwt="datasets/{dataset_id}/safari/ref.gbwt",
         min="datasets/{dataset_id}/safari/ref.min",
-        ry="datasets/{dataset_id}/safari/ref.ry"
+        ry="datasets/{dataset_id}/safari/ref.ry",
+        time="datasets/{dataset_id}/safari/ref.index.log"
     threads:
         16
     shell:
+        # Each step appends its own `time -v` block: total time is the sum, peak memory the max
         """
-        {input.safari} construct -p -r {input.fasta} -t {threads} > {output.vg}
-        {input.safari} convert -t {threads} -o {output.vg} > {output.og}
-        {input.safari} view {output.og} > {output.gfa}
-        {input.safari} index -t {threads} -j {output.dist} {output.og}
-        {input.safari} index -t {threads} -x {output.xg} {output.og}
-        {input.safari} gbwt --num-threads {threads} -g {output.gbz} --gbz-format -G {output.gfa}
-        {input.safari} gbwt --num-threads {threads} -o {output.gbwt} -g {output.gg} -Z {output.gbz}
-        {input.safari} minimizer -t {threads} -o {output.min} -g {output.gbwt} -d {output.dist} {output.og}
-        {input.safari} rymer -t {threads} -o {output.ry} -g {output.gbwt} -d {output.dist} {output.og}
+        : > {output.time}
+        /usr/bin/time -v {input.safari} construct -p -r {input.fasta} -t {threads} > {output.vg} 2>> {output.time}
+        /usr/bin/time -v {input.safari} convert -t {threads} -o {output.vg} > {output.og} 2>> {output.time}
+        /usr/bin/time -v {input.safari} view {output.og} > {output.gfa} 2>> {output.time}
+        /usr/bin/time -v {input.safari} index -t {threads} -j {output.dist} {output.og} 2>> {output.time}
+        /usr/bin/time -v {input.safari} index -t {threads} -x {output.xg} {output.og} 2>> {output.time}
+        /usr/bin/time -v {input.safari} gbwt --num-threads {threads} -g {output.gbz} --gbz-format -G {output.gfa} 2>> {output.time}
+        /usr/bin/time -v {input.safari} gbwt --num-threads {threads} -o {output.gbwt} -g {output.gg} -Z {output.gbz} 2>> {output.time}
+        /usr/bin/time -v {input.safari} minimizer -t {threads} -o {output.min} -g {output.gbwt} -d {output.dist} {output.og} 2>> {output.time}
+        /usr/bin/time -v {input.safari} rymer -t {threads} -o {output.ry} -g {output.gbwt} -d {output.dist} {output.og} 2>> {output.time}
         """
 
 rule safari_single_end:
