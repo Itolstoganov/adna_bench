@@ -36,7 +36,7 @@ taken from --extra-benchmarks; they are marked with '*'.
 
 Usage:
     python bench_summary.py --rundir meta_bench/runs/sim_dataset
-    python bench_summary.py --rundir <dir> --outdir <dir>   # also write TSVs
+    python bench_summary.py --rundir <dir> --outdir <dir>   # also write TSVs + plots
     python bench_summary.py --rundir <dir> --extra-benchmarks <dir>/old_benchmarks
 """
 
@@ -70,6 +70,9 @@ SETUP_RULES = ("BUILD_MALT_DB", "COMPILE_STROBEALIGN", "REFERENCE_SUBSET",
 BENCHMARK_GLOBS = {
     "BOWTIE2_INDEX": "../results/REFERENCE_DB/*_BOWTIE2_BUILD.benchmark.txt",
 }
+# The one-off index each profiler's alignment step reads.
+INDEX_RULES = {"malt": "BUILD_MALT_DB", "strobealign": "STROBEALIGN_INDEX",
+               "bowtie2": "BOWTIE2_INDEX", "bwa_aln": "BWA_INDEX"}
 # Upstream of every profiler, so it differentiates none of them -- but it sets
 # the pipeline's real memory ceiling, so it is worth showing.
 SHARED_RULES = ("KRAKENUNIQ", "FILTER_KRAKENUNIQ_OUTPUT", "CUTADAPT_ADAPTER_TRIMMING")
@@ -343,13 +346,123 @@ def print_phase_table(rows):
               + (f"   {row['note']}" if row["note"] else ""))
 
 
+# --------------------------------------------------------------------------- #
+# Plots
+# --------------------------------------------------------------------------- #
+MAP_COLOR = "#2a78d6"
+INDEX_COLOR = "#eb6834"
+
+
+def _bar_axes(plt, n_bars, ylabel, title):
+    fig, ax = plt.subplots(figsize=(1.2 + 1.1 * n_bars, 3.6))
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, loc="left", fontsize=11)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", linewidth=0.4, color="0.88", zorder=0)
+    return fig, ax
+
+
+def _label_bars(ax, bars, values, fmt):
+    for bar, v in zip(bars, values):
+        ax.annotate(fmt(v), (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                    xytext=(0, 3), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=8, color="0.25")
+
+
+def _save(fig, outdir, name):
+    fig.tight_layout()
+    paths = [os.path.join(outdir, f"{name}.{ext}") for ext in ("pdf", "png")]
+    for path in paths:
+        fig.savefig(path, dpi=200)
+    return paths
+
+
+def plot_resources(summaries, outdir):
+    """Three bar charts, one bar (group) per profiler: mean per-sample mapping
+    wall time with the min-max over samples as a whisker, index build wall time,
+    and peak RSS of mapping next to that of index construction.
+
+    'Mapping' is each profiler's alignment rule, so malt's bar also covers its
+    LCA binning (one rule) while the ngsLCA profilers' assignment step is left
+    out. A '*' on a profiler marks a rule read from --extra-benchmarks.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    mapping = {}
+    for profiler, _stage, rule in PROFILER_STAGES:
+        if rule in summaries:
+            mapping.setdefault(profiler, summaries[rule])
+    index = {p: summaries[r] for p, r in INDEX_RULES.items() if r in summaries}
+    written = []
+
+    def tick(profiler, *recs):
+        return profiler + ("*" if any(r["rule"].endswith("*") for r in recs) else "")
+
+    if mapping:
+        names = list(mapping)
+        mean = [mapping[p]["wall_mean_s"] / 60 for p in names]
+        lo = [m - mapping[p]["wall_min_s"] / 60 for p, m in zip(names, mean)]
+        hi = [mapping[p]["wall_max_s"] / 60 - m for p, m in zip(names, mean)]
+        n = max(mapping[p]["n"] for p in names)
+        fig, ax = _bar_axes(plt, len(names), "wall time per sample (min)",
+                            f"Mapping runtime, mean over {n} samples")
+        bars = ax.bar(range(len(names)), mean, width=0.6, color=MAP_COLOR,
+                      yerr=[lo, hi], error_kw={"elinewidth": 1, "capsize": 3,
+                                               "ecolor": "0.35"}, zorder=2)
+        for bar, top in zip(bars, hi):        # labels clear the whisker
+            bar.set_height(bar.get_height() + top)
+        _label_bars(ax, bars, mean, lambda v: f"{v:.1f}")
+        for bar, m in zip(bars, mean):
+            bar.set_height(m)
+        ax.set_xticks(range(len(names)), [tick(p, mapping[p]) for p in names])
+        ax.margins(y=0.12)
+        written += _save(fig, outdir, "bench_mapping_runtime")
+        plt.close(fig)
+
+    if index:
+        names = list(index)
+        hours = [index[p]["wall_mean_s"] / 3600 for p in names]
+        fig, ax = _bar_axes(plt, len(names), "wall time (h)", "Index construction runtime")
+        bars = ax.bar(range(len(names)), hours, width=0.6, color=INDEX_COLOR, zorder=2)
+        _label_bars(ax, bars, hours,
+                    lambda v: f"{v:.2f}" if v < 1 else f"{v:.1f}")
+        ax.set_xticks(range(len(names)), [tick(p, index[p]) for p in names])
+        ax.margins(y=0.12)
+        written += _save(fig, outdir, "bench_index_runtime")
+        plt.close(fig)
+
+    names = [p for p in INDEX_RULES if p in mapping or p in index]
+    if names:
+        width = 0.38
+        fig, ax = _bar_axes(plt, len(names), "peak RSS (GB)", "Peak memory")
+        for offset, recs, color, label in (
+                (-width / 2, mapping, MAP_COLOR, "mapping (max over samples)"),
+                (width / 2, index, INDEX_COLOR, "index construction")):
+            xs = [i + offset for i, p in enumerate(names) if p in recs]
+            gb = [recs[p]["max_rss_max_gb"] for p in names if p in recs]
+            # 2px surface gap between the paired bars
+            bars = ax.bar(xs, gb, width=width, color=color, label=label,
+                          edgecolor="white", linewidth=1, zorder=2)
+            _label_bars(ax, bars, gb, lambda v: f"{v:.1f}")
+        ax.set_xticks(range(len(names)),
+                      [tick(p, *(r[p] for r in (mapping, index) if p in r)) for p in names])
+        ax.margins(y=0.12)
+        ax.legend(frameon=False, fontsize=8, loc="upper right")
+        written += _save(fig, outdir, "bench_peak_memory")
+        plt.close(fig)
+    return written
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rundir", default=".",
                     help="aMeta run directory holding benchmarks/ and logs/ (default: .)")
     ap.add_argument("--outdir", default="",
-                    help="also write bench_rules.tsv and bench_phases.tsv here")
+                    help="also write bench_rules.tsv, bench_phases.tsv and the runtime/memory "
+                         "plots here")
     ap.add_argument("--rules", default="",
                     help="comma-separated extra rule names to include in the "
                          "per-rule table (default: the profiler, setup and "
@@ -412,6 +525,8 @@ def main(argv=None):
         write_tsv(rules_tsv, RULE_COLS, [summaries[r] for r in wanted if r in summaries])
         write_tsv(phases_tsv, PHASE_COLS, phases)
         print(f"\n{rules_tsv}\n{phases_tsv}")
+        for path in plot_resources(summaries, args.outdir):
+            print(path)
 
 
 if __name__ == "__main__":

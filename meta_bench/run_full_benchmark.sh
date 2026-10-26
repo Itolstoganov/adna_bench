@@ -5,7 +5,8 @@
 #   2. simulate    simulate 10 ancient metagenomic samples with gargammel
 #   3. ameta       run aMeta (benchmark fork: KrakenUniq -> MALT + strobealign/ngsLCA
 #                  -> authentication) with config/config_ngslca.yaml
-#   4. summary     score the authentication results against the simulation ground truth
+#   4. summary     score the authentication results against the simulation ground truth,
+#                  and summarise runtime and memory from the Snakemake benchmarks
 #
 # Usage (from anywhere; the script locates the repo itself):
 #   meta_bench/run_full_benchmark.sh               # all four steps, in order
@@ -225,7 +226,11 @@ step_summary() {
   in_env "$SIM_ENV" python "$MB_DIR/scripts/auth_summary.py" \
     --results "$RUNDIR/results" \
     --truth "$SIM_RESULTS" \
-    --outdir "$RUNDIR/results/AUTH_SUMMARY"
+    --outdir "$RUNDIR/results/meta_summary"
+
+  in_env "$SIM_ENV" python "$MB_DIR/scripts/bench_summary.py" \
+    --rundir "$RUNDIR" \
+    --outdir "$RUNDIR/results/meta_summary/bench"
 }
 
 ##############################################################################
@@ -269,4 +274,4 @@ for s in $steps_sorted; do
 done
 
 echo
-echo "Done. Results: $RUNDIR/results (AUTH_SUMMARY/ holds the ground-truth heatmap and metrics)."
+echo "Done. Results: $RUNDIR/results (meta_summary/ holds the ground-truth heatmap and metrics, meta_summary/bench/ the runtime/memory summary)."
