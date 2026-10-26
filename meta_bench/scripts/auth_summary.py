@@ -1193,12 +1193,6 @@ def criteria_filter(categories, taxids):
     return keep
 
 
-def expected_label(index):
-    """Which ground-truth categories should fire criterion `index`."""
-    _name, _pts, ancient, modern = CRITERIA[index]
-    return "ancient + modern" if ancient and modern else "ancient only"
-
-
 def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
                           title_suffix=""):
     """Draw the FP/FN table as a figure, cells shaded by count."""
@@ -1207,7 +1201,7 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
 
-    widths = [2.5, 0.42, 1.35] + [0.62, 0.62] * len(profilers)
+    widths = [2.5, 0.6] + [0.62, 0.62] * len(profilers)
     edges = [0.0]
     for w in widths:
         edges.append(edges[-1] + w)
@@ -1239,16 +1233,14 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
     header = (0.90, 0.90, 0.92)
     cell(0, 0, "", face=header)
     cell(1, 0, "", face=header)
-    cell(2, 0, "should fire for", face=header, weight="bold", size=7.5)
     for i, p in enumerate(profilers):
-        cell(3 + 2 * i, 0, p, face=header, weight="bold", ncols=2)
-    for col, text in ((0, "criterion"), (1, "pts")):
+        cell(2 + 2 * i, 0, p, face=header, weight="bold", ncols=2)
+    for col, text in ((0, "Criterion"), (1, "Points")):
         cell(col, 1, text, face=header, weight="bold",
              align="left" if col == 0 else "center")
-    cell(2, 1, "", face=header)
     for i, _p in enumerate(profilers):
-        cell(3 + 2 * i, 1, "FP", face=header, weight="bold", color=FP_COLOR)
-        cell(4 + 2 * i, 1, "FN", face=header, weight="bold", color=FN_COLOR)
+        cell(2 + 2 * i, 1, "FP", face=header, weight="bold", color=FP_COLOR)
+        cell(3 + 2 * i, 1, "FN", face=header, weight="bold", color=FN_COLOR)
 
     max_fp = max((r[f"{p}_FP"] for r in rows for p in profilers), default=1) or 1
     max_fn = max((r[f"{p}_FN"] for r in rows for p in profilers), default=1) or 1
@@ -1257,10 +1249,9 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
         stripe = (1, 1, 1) if j % 2 else (0.965, 0.965, 0.975)
         cell(0, r, row["criterion"], face=stripe, align="left")
         cell(1, r, str(row["points"]), face=stripe)
-        cell(2, r, expected_label(j), face=stripe, size=7, color="0.35")
         for i, p in enumerate(profilers):
-            for col, value, base, top in ((3 + 2 * i, row[f"{p}_FP"], FP_COLOR, max_fp),
-                                          (4 + 2 * i, row[f"{p}_FN"], FN_COLOR, max_fn)):
+            for col, value, base, top in ((2 + 2 * i, row[f"{p}_FP"], FP_COLOR, max_fp),
+                                          (3 + 2 * i, row[f"{p}_FN"], FN_COLOR, max_fn)):
                 face = blend(base, value / top) if value else stripe
                 cell(col, r, str(value), face=face,
                      color="white" if luminance(face) < 0.55 else "black")
@@ -1268,11 +1259,10 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
     r = nbody + 2
     cell(0, r, "total", face=header, weight="bold", align="left")
     cell(1, r, str(sum(x["points"] for x in rows)), face=header, weight="bold")
-    cell(2, r, "", face=header)
     for i, p in enumerate(profilers):
-        cell(3 + 2 * i, r, str(sum(x[f"{p}_FP"] for x in rows)), face=header,
+        cell(2 + 2 * i, r, str(sum(x[f"{p}_FP"] for x in rows)), face=header,
              weight="bold")
-        cell(4 + 2 * i, r, str(sum(x[f"{p}_FN"] for x in rows)), face=header,
+        cell(3 + 2 * i, r, str(sum(x[f"{p}_FN"] for x in rows)), face=header,
              weight="bold")
 
     ax.set_title("Authentication criteria results" + title_suffix,
