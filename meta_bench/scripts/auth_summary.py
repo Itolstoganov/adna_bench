@@ -1267,14 +1267,6 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
 
     ax.set_title("Authentication criteria results" + title_suffix,
                  fontsize=11, pad=12)
-    note = ("FP = criterion fired where ground truth says it should not; "
-            "FN = vice versa")
-            # + "   ".join(f"{p}: {judged[p]} node(s) judged"
-            #              + (f", {skipped[p]} skipped (not in this run's "
-            #                 f"KrakenUniq output)" if skipped[p] else "")
-            #              for p in profilers))
-    fig.text(0.5, 0.012, note, ha="center", va="bottom", fontsize=7, color="0.35")
-
     fig.savefig(out_pdf, bbox_inches="tight")
     fig.savefig(out_png, dpi=200, bbox_inches="tight")
     plt.close(fig)

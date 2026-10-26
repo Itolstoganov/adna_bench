@@ -117,6 +117,9 @@ def summarise_rule(bench_dirs, rule):
     rss = [_num(r, "max_rss") / 1024 for r in rows]          # Snakemake writes MB
     cpu = [_num(r, "cpu_time") for r in rows]
     total_wall = sum(wall)
+    by_job = {}
+    for r, w in zip(rows, wall):
+        by_job.setdefault(r["_job"], []).append(w)
     return {
         "rule": rule + ("*" if i else ""),
         "n": len(rows),
@@ -129,6 +132,8 @@ def summarise_rule(bench_dirs, rule):
         "cpu_time_mean_s": stats.mean(cpu),
         # what the run actually achieved, not what the rule asked for
         "eff_threads": (sum(cpu) / total_wall) if total_wall else float("nan"),
+        # per sample, for plotting a profiler's stages summed sample by sample
+        "wall_by_job": {job: stats.mean(ws) for job, ws in by_job.items()},
     }
 
 
@@ -351,6 +356,7 @@ def print_phase_table(rows):
 # --------------------------------------------------------------------------- #
 MAP_COLOR = "#2a78d6"
 INDEX_COLOR = "#eb6834"
+LCA_COLOR = "#1baf7a"
 
 
 def _bar_axes(plt, n_bars, ylabel, title):
@@ -378,47 +384,61 @@ def _save(fig, outdir, name):
 
 
 def plot_resources(summaries, outdir):
-    """Three bar charts, one bar (group) per profiler: mean per-sample mapping
+    """Three bar charts, one bar (group) per profiler: mean per-sample profiling
     wall time with the min-max over samples as a whisker, index build wall time,
-    and peak RSS of mapping next to that of index construction.
+    and peak RSS of profiling next to that of index construction.
 
-    'Mapping' is each profiler's alignment rule, so malt's bar also covers its
-    LCA binning (one rule) while the ngsLCA profilers' assignment step is left
-    out. A '*' on a profiler marks a rule read from --extra-benchmarks.
+    'Profiling' is all of a profiler's PROFILER_STAGES: alignment stacked under
+    ngsLCA's taxonomic assignment, or for malt the one rule that does both. The
+    whisker spans each sample's stages summed. A '*' on a profiler marks a rule
+    read from --extra-benchmarks.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    mapping = {}
+    stages = {}
     for profiler, _stage, rule in PROFILER_STAGES:
         if rule in summaries:
-            mapping.setdefault(profiler, summaries[rule])
+            stages.setdefault(profiler, []).append(summaries[rule])
     index = {p: summaries[r] for p, r in INDEX_RULES.items() if r in summaries}
     written = []
 
     def tick(profiler, *recs):
         return profiler + ("*" if any(r["rule"].endswith("*") for r in recs) else "")
 
-    if mapping:
-        names = list(mapping)
-        mean = [mapping[p]["wall_mean_s"] / 60 for p in names]
-        lo = [m - mapping[p]["wall_min_s"] / 60 for p, m in zip(names, mean)]
-        hi = [mapping[p]["wall_max_s"] / 60 - m for p, m in zip(names, mean)]
-        n = max(mapping[p]["n"] for p in names)
+    if stages:
+        names = list(stages)
+        xs = range(len(names))
+        n = max(s["n"] for p in names for s in stages[p])
         fig, ax = _bar_axes(plt, len(names), "wall time per sample (min)",
-                            f"Mapping runtime, mean over {n} samples")
-        bars = ax.bar(range(len(names)), mean, width=0.6, color=MAP_COLOR,
-                      yerr=[lo, hi], error_kw={"elinewidth": 1, "capsize": 3,
-                                               "ecolor": "0.35"}, zorder=2)
-        for bar, top in zip(bars, hi):        # labels clear the whisker
-            bar.set_height(bar.get_height() + top)
-        _label_bars(ax, bars, mean, lambda v: f"{v:.1f}")
-        for bar, m in zip(bars, mean):
-            bar.set_height(m)
-        ax.set_xticks(range(len(names)), [tick(p, mapping[p]) for p in names])
+                            f"Profiling runtime, mean over {n} samples")
+        bottom = [0.0] * len(names)
+        for i, (color, label) in enumerate(((MAP_COLOR, "alignment"),
+                                            (LCA_COLOR, "taxonomic assignment"))):
+            height = [stages[p][i]["wall_mean_s"] / 60 if i < len(stages[p]) else 0
+                      for p in names]
+            if any(height):
+                # white edge = 2px surface gap between stacked segments
+                ax.bar(xs, height, bottom=bottom, width=0.6, color=color, label=label,
+                       edgecolor="white", linewidth=1, zorder=2)
+                bottom = [b + h for b, h in zip(bottom, height)]
+        lo, hi = [], []
+        for p, top in zip(names, bottom):
+            jobs = set.intersection(*(set(s["wall_by_job"]) for s in stages[p]))
+            totals = [sum(s["wall_by_job"][j] for s in stages[p]) / 60 for j in jobs]
+            lo.append(max(0.0, top - min(totals)) if totals else 0.0)
+            hi.append(max(0.0, max(totals) - top) if totals else 0.0)
+        ax.errorbar(xs, bottom, yerr=[lo, hi], fmt="none", elinewidth=1, capsize=3,
+                    ecolor="0.35", zorder=3)
+        for x, top, up in zip(xs, bottom, hi):    # labels clear the whisker
+            ax.annotate(f"{top:.1f}", (x, top + up), xytext=(0, 3),
+                        textcoords="offset points", ha="center", va="bottom",
+                        fontsize=8, color="0.25")
+        ax.set_xticks(xs, [tick(p, *stages[p]) for p in names])
         ax.margins(y=0.12)
-        written += _save(fig, outdir, "bench_mapping_runtime")
+        ax.legend(frameon=False, fontsize=8, loc="upper right")
+        written += _save(fig, outdir, "bench_profiling_runtime")
         plt.close(fig)
 
     if index:
@@ -433,12 +453,13 @@ def plot_resources(summaries, outdir):
         written += _save(fig, outdir, "bench_index_runtime")
         plt.close(fig)
 
-    names = [p for p in INDEX_RULES if p in mapping or p in index]
+    profiling = {p: max(ss, key=lambda s: s["max_rss_max_gb"]) for p, ss in stages.items()}
+    names = [p for p in INDEX_RULES if p in profiling or p in index]
     if names:
         width = 0.38
         fig, ax = _bar_axes(plt, len(names), "peak RSS (GB)", "Peak memory")
         for offset, recs, color, label in (
-                (-width / 2, mapping, MAP_COLOR, "mapping (max over samples)"),
+                (-width / 2, profiling, MAP_COLOR, "profiling"),
                 (width / 2, index, INDEX_COLOR, "index construction")):
             xs = [i + offset for i, p in enumerate(names) if p in recs]
             gb = [recs[p]["max_rss_max_gb"] for p in names if p in recs]
@@ -447,7 +468,7 @@ def plot_resources(summaries, outdir):
                           edgecolor="white", linewidth=1, zorder=2)
             _label_bars(ax, bars, gb, lambda v: f"{v:.1f}")
         ax.set_xticks(range(len(names)),
-                      [tick(p, *(r[p] for r in (mapping, index) if p in r)) for p in names])
+                      [tick(p, *(r[p] for r in (profiling, index) if p in r)) for p in names])
         ax.margins(y=0.12)
         ax.legend(frameon=False, fontsize=8, loc="upper right")
         written += _save(fig, outdir, "bench_peak_memory")
