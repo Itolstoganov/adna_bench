@@ -920,6 +920,16 @@ def ancient_truth_set(sample, truth, host_keys, include_host):
             and (include_host or k not in host_keys)}
 
 
+def threshold_sets(sample, scores, truth, host_keys, include_host, cut, surfaced):
+    """(predicted, actual) ancient sets behind jaccard_at_threshold."""
+    predicted = {k for (s, k), rec in scores.items()
+                 if s == sample and rec["score"] >= cut
+                 and (surfaced is None or k in surfaced)
+                 and (include_host or k not in host_keys)}
+    actual = ancient_truth_set(sample, truth, host_keys, include_host)
+    return predicted, actual if surfaced is None else actual & surfaced
+
+
 def jaccard_at_threshold(sample, scores, truth, host_keys, include_host, cut,
                          surfaced):
     """Jaccard of {scored >= cut} against the sample's true ancient set.
@@ -942,12 +952,8 @@ def jaccard_at_threshold(sample, scores, truth, host_keys, include_host, cut,
     screening step and the authentication step together, as a user of the
     pipeline experiences them.
     """
-    predicted = {k for (s, k), rec in scores.items()
-                 if s == sample and rec["score"] >= cut
-                 and (surfaced is None or k in surfaced)
-                 and (include_host or k not in host_keys)}
-    actual = ancient_truth_set(sample, truth, host_keys, include_host)
-    return _jaccard(predicted, actual if surfaced is None else actual & surfaced)
+    return _jaccard(*threshold_sets(sample, scores, truth, host_keys,
+                                    include_host, cut, surfaced))
 
 
 def jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
@@ -966,8 +972,28 @@ def jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
     return rows
 
 
+def fp_free_threshold(profilers, scores_by_profiler, samples, truth, host_keys,
+                      include_host, cuts, detected, adjust=True):
+    """The lowest cut at which no profiler predicts a non-ancient taxon in any
+    sample, or None if false positives survive even the highest cut.
+
+    A false positive is a taxon scored >= cut that jaccard_at_threshold's
+    prediction holds but its truth set does not. Raising the cut only shrinks
+    the prediction, so the first clean cut is clean from there on.
+    """
+    for cut in sorted(cuts):
+        if not any(
+                predicted - actual
+                for p in profilers for s in samples
+                for predicted, actual in [threshold_sets(
+                    s, scores_by_profiler[p], truth, host_keys, include_host,
+                    cut, detected.get(s, set()) if adjust else None)]):
+            return cut
+    return None
+
+
 def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples,
-                         adjusted=True):
+                         adjusted=True, fp_free=None):
     """Mean Jaccard against score threshold, one line per profiler."""
     import matplotlib
     matplotlib.use("Agg")
@@ -982,6 +1008,10 @@ def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples,
         ys = [r[p] for r in rows]
         ax.plot(xs, ys, marker=markers[i % len(markers)], markersize=5,
                 linewidth=1.6, color=cmap(i), label=p, zorder=3)
+    if fp_free is not None:
+        # between the last cut with a false positive and the first without
+        ax.axvline(fp_free - 0.5, linestyle="--", linewidth=1.2, color="0.35",
+                   label="high confidence threshold", zorder=2)
 
     ax.set_xticks([r["threshold"] for r in rows])
     ax.set_xlabel("authentication score threshold t  (predicted ancient = score ≥ t)")
@@ -2076,16 +2106,21 @@ def summarise_jaccard(args, profilers, scores_by_profiler, samples, truth,
     rows = jaccard_threshold_rows(profilers, scores_by_profiler, samples, truth,
                                   host_keys, args.include_host, cuts, detected,
                                   adjust)
+    fp_free = fp_free_threshold(profilers, scores_by_profiler, samples, truth,
+                                host_keys, args.include_host, cuts, detected,
+                                adjust)
     out_tsv = os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.tsv")
     write_tsv(out_tsv, ["threshold"] + list(profilers), rows,
               {p: 4 for p in profilers})
     print(f"\nJaccard vs score threshold ({'KrakenUniq-adjusted' if adjust else 'unadjusted'})"
           f" -> {out_tsv}")
+    print("High confidence threshold (no false positives in any profiler): "
+          + (f"score >= {fp_free}" if fp_free is not None else "none"))
     render_jaccard_curve(
         rows, profilers,
         os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.pdf"),
         os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.png"),
-        len(samples), adjust)
+        len(samples), adjust, fp_free)
     print_tsv(["threshold"] + list(profilers), rows, {p: 4 for p in profilers})
 
 
