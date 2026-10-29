@@ -380,14 +380,14 @@ def _apply_baseline(df, y, baseline, op):
 
 def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
                         title=None, delta_baseline=None, ratio_baseline=None,
-                        log_y=False, x="dataset", xlabel="Dataset"):
+                        log_y=False, x="dataset", xlabel="Dataset", fontsize=None):
     """Point/line plot of metric `y` with datasets (or column `x`) on the x axis,
     one line per tool.
 
     When `delta_baseline` is set, values are plotted as the difference to that
     tool (a dashed line marks zero); when `ratio_baseline` is set, as the ratio to
     that tool (a dashed line marks one). `log_y` puts the y axis on a log scale.
-    The figure is written to `pdf` and/or `png_path` (both may be given).
+    `fontsize` sets the title, axis label and tick label size. The figure is written to `pdf` and/or `png_path` (both may be given).
     """
     if y not in df.columns:
         return
@@ -418,11 +418,13 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
         ylabel = label
     if log_y:
         plt.yscale("log")
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title if title is not None else y)
+    plt.xlabel(xlabel, fontsize=fontsize)
+    plt.ylabel(ylabel, fontsize=fontsize)
+    plt.title(title if title is not None else y, fontsize=fontsize)
     plt.xticks(rotation=45, ha="right")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    if fontsize is not None:
+        plt.tick_params(labelsize=fontsize - 2)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=fontsize)
     plt.tight_layout()
     if pdf is not None:
         pdf.savefig(bbox_inches="tight")
@@ -507,13 +509,16 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
                 )
                 runtime_col = "Runtime per Mbp (s)"
                 runtime_title = "Runtime per Mbp"
-            plot_reference_lines(with_reference_columns(res_df), runtime_col,
-                                 variation_order, pdf=pdf,
-                                 png_path=png_path("k_runtime"), title=runtime_title,
-                                 sharey=False)
-            # absolute peak memory
-            plot_summary_metric(res_df, "Peak Memory (GB)", dataset_order, pdf=pdf,
-                                png_path=png_path("k_memory"), title="Peak Memory")
+            for legend, slug, plot_pdf in ((True, "k_runtime", pdf),
+                                           (False, "k_runtime_nolegend", None)):
+                plot_reference_lines(with_reference_columns(res_df), runtime_col,
+                                     variation_order, pdf=plot_pdf,
+                                     png_path=png_path(slug), title=runtime_title,
+                                     sharey=False, log_y=True, legend=legend,
+                                     fontsize=15)
+            plot_reference_metric(res_df, "Peak Memory (GB)", genome_by_dataset,
+                                  pdf=pdf, png_path=png_path("k_memory"),
+                                  title="Peak Memory", log_y=True, fontsize=15)
             # peak memory relative to the default aligner (log scale)
             plot_summary_metric(
                 res_df, "Peak Memory (GB)", dataset_order, pdf=pdf,
@@ -609,7 +614,7 @@ def plot_outcome_bars(df, correct_col, mapped_col, variation_order, *, pdf=None,
         spans.append((reference, first, x - 1))
         x += reference_gap
 
-    fig, ax = plt.subplots(figsize=(max(12, 0.42 * len(centers) * len(tools)), 4))
+    fig, ax = plt.subplots(figsize=(max(12, 0.5 * len(centers) * len(tools)), 4.5))
     for i, tool in enumerate(tools):
         rows = df[df["Display"] == tool].set_index(["reference", "variation"])
         xs, correct, incorrect, unmapped = [], [], [], []
@@ -629,8 +634,8 @@ def plot_outcome_bars(df, correct_col, mapped_col, variation_order, *, pdf=None,
                bottom=[c + w for c, w in zip(correct, incorrect)],
                color="#e5e7eb", edgecolor="white", linewidth=0.5)
         for bx, c, w in zip(xs, correct, incorrect):
-            ax.text(bx, 101, f"{c:.1f}", ha="center", va="bottom", fontsize=6.5)
-            ax.text(bx, 107, f"{c + w:.1f}", ha="center", va="bottom", fontsize=6.5,
+            ax.text(bx, 101, f"{c:.1f}", ha="center", va="bottom", fontsize=8.5)
+            ax.text(bx, 109, f"{c + w:.1f}", ha="center", va="bottom", fontsize=8.5,
                     color="#6b7280")
     ax.set_xticks(centers)
     ax.set_xticklabels([level for _ref, level in labels])
@@ -640,9 +645,10 @@ def plot_outcome_bars(df, correct_col, mapped_col, variation_order, *, pdf=None,
     for reference, first, last in spans:
         ax.text((first + last) / 2, -0.12, reference, transform=ax.get_xaxis_transform(),
                 ha="center", va="top", fontsize=11, fontweight="bold")
-    ax.set_ylim(0, 115)
+    ax.set_ylim(0, 118)
     ax.set_yticks(range(0, 101, 20))
-    ax.set_ylabel("Reads (%)")
+    ax.tick_params(axis="y", labelsize=12)
+    ax.set_ylabel("Reads (%)", fontsize=14)
     ax.spines[["top", "right"]].set_visible(False)
 
     tool_handles = [Patch(facecolor=palette[t]) for t in tools]
@@ -676,7 +682,7 @@ def plot_deam_accuracy_diff(df, variation_order, *, pdf=None, png_path=None):
     df = df.copy()
     f = df["deam_fraction"]
     nondeam = (df[all_col] - f * df[deam_col]) / (1 - f)
-    y = "Δ % Accuracy (deaminated − non-deaminated)"
+    y = "% Accuracy (deaminated − non-deaminated)"
     df[y] = df[deam_col] - nondeam
     plot_reference_lines(df, y, variation_order, pdf=pdf, png_path=png_path,
                          title="Accuracy difference: deaminated vs non-deaminated reads",
@@ -684,9 +690,11 @@ def plot_deam_accuracy_diff(df, variation_order, *, pdf=None, png_path=None):
 
 
 def plot_reference_lines(df, y, variation_order, *, pdf=None, png_path=None,
-                         title=None, zero_line=False, sharey=True):
+                         title=None, zero_line=False, sharey=True, log_y=False,
+                         legend=True, fontsize=None):
     """Point/line plot of `y`, one panel per reference, variation levels on the
-    x axis and one line per tool."""
+    x axis and one line per tool. `fontsize` sets the axis label and panel title
+    size (matplotlib defaults otherwise)."""
     if y not in df.columns:
         return
     df = df[df[y].notna()]
@@ -707,14 +715,18 @@ def plot_reference_lines(df, y, variation_order, *, pdf=None, png_path=None,
                       order=levels, hue_order=tools, palette=palette,
                       markers=[markers[t] for t in tools], errorbar=None, ax=ax,
                       legend=False)
-        ax.set_title(reference)
-        ax.set_xlabel("Variation")
-        ax.set_ylabel(y)
+        if log_y:
+            ax.set_yscale("log")
+        ax.set_title(reference, fontsize=fontsize)
+        ax.set_xlabel("Variation", fontsize=fontsize)
+        ax.set_ylabel(y if ax is axes[0] else "", fontsize=fontsize)
         ax.yaxis.set_tick_params(labelleft=True)
-    handles = [Line2D([], [], color=palette[t], marker=markers[t]) for t in tools]
-    fig.legend(handles, tools, title="Tool", loc="center left",
-               bbox_to_anchor=(1.0, 0.5), frameon=False)
-    fig.suptitle(title if title is not None else y)
+    if legend:
+        handles = [Line2D([], [], color=palette[t], marker=markers[t]) for t in tools]
+        fig.legend(handles, tools, title="Tool", loc="center left",
+                   bbox_to_anchor=(1.0, 0.5), frameon=False)
+    fig.suptitle(title if title is not None else y,
+                 fontsize=fontsize + 2 if fontsize is not None else None)
     _save_summary_figure(fig, pdf, png_path)
 
 
@@ -723,6 +735,20 @@ INDEX_METRICS = [
     ("Index Time (s)", "index_runtime", "Index Construction Time"),
     ("Index Peak Memory (GB)", "index_memory", "Index Construction Peak Memory"),
 ]
+
+
+def plot_reference_metric(res_df, y, genome_by_dataset, *, pdf=None, png_path=None,
+                          title=None, **kwargs):
+    """Plot `y` with references on the x axis, averaging over the datasets that
+    share a reference (variation levels, read lengths)."""
+    if y not in res_df.columns:
+        return
+    df = res_df.copy()
+    df["reference"] = df["dataset"].map(genome_by_dataset)
+    df = df.groupby(["reference", "Display"], as_index=False, sort=False)[y].mean()
+    reference_order = list(dict.fromkeys(genome_by_dataset.values()))
+    plot_summary_metric(df, y, reference_order, pdf=pdf, png_path=png_path,
+                        title=title, x="reference", xlabel="Reference", **kwargs)
 
 
 def plot_index_metrics(res_df, genome_by_dataset, *, pdf=None, png_path=None):
