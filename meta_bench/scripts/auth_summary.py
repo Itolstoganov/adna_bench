@@ -95,6 +95,8 @@ import sys
 
 import pandas as pd
 
+import profiler_style
+
 # gargammel's -damage deaminates the bacterial and endogenous pools but leaves
 # present-day contamination (cont) undamaged, even in the ancient pass.
 DAMAGED_CLASSES = ("bact", "endo")
@@ -992,32 +994,31 @@ def fp_free_threshold(profilers, scores_by_profiler, samples, truth, host_keys,
     return None
 
 
-def render_jaccard_curve(rows, profilers, out_pdf, out_png, n_samples,
-                         adjusted=True, fp_free=None):
+def render_jaccard_curve(rows, profilers, out_pdf, out_png, adjusted=True,
+                         fp_free=None):
     """Mean Jaccard against score threshold, one line per profiler."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
-    cmap = plt.get_cmap("tab10")
-    markers = ["o", "s", "^", "D", "v"]
+    style = profiler_style.styles(profilers)
 
-    for i, p in enumerate(profilers):
+    for p in profilers:
         xs = [r["threshold"] for r in rows]
         ys = [r[p] for r in rows]
-        ax.plot(xs, ys, marker=markers[i % len(markers)], markersize=5,
-                linewidth=1.6, color=cmap(i), label=p, zorder=3)
+        color, marker = style[p]
+        ax.plot(xs, ys, marker=marker, markersize=5, linewidth=1.6, color=color,
+                label=profiler_style.display(p), zorder=3)
     if fp_free is not None:
         # between the last cut with a false positive and the first without
         ax.axvline(fp_free - 0.5, linestyle="--", linewidth=1.2, color="0.35",
                    label="high confidence threshold", zorder=2)
 
     ax.set_xticks([r["threshold"] for r in rows])
-    ax.set_xlabel("authentication score threshold t  (predicted ancient = score ≥ t)")
-    ax.set_ylabel(f"mean Jaccard over {n_samples} "
-                  f"{'sample' if n_samples == 1 else 'samples'}")
-    ax.set_title("Recovery of the true ancient genome set vs score threshold\n"
+    ax.set_xlabel("authentication score threshold t")
+    ax.set_ylabel("mean Jaccard index")
+    ax.set_title("Recovery of the true ancient genome set\n"
                  + ("(KrakenUniq-adjusted)" if adjusted else ""),
                  fontsize=11)
     ax.set_ylim(0, max(1.0, max((r[p] for r in rows for p in profilers
@@ -1273,7 +1274,8 @@ def render_criteria_table(rows, profilers, out_pdf, out_png, judged, skipped,
     cell(0, 0, "", face=header)
     cell(1, 0, "", face=header)
     for i, p in enumerate(profilers):
-        cell(2 + 2 * i, 0, p, face=header, weight="bold", ncols=2)
+        cell(2 + 2 * i, 0, profiler_style.display(p), face=header, weight="bold",
+             ncols=2)
     for col, text in ((0, "Criterion"), (1, "Points")):
         cell(col, 1, text, face=header, weight="bold",
              align="left" if col == 0 else "center")
@@ -1694,8 +1696,7 @@ def render_ani_scatter(rows, profilers, category, out_pdf, out_png, abund_range,
               "simulated genome with a usable skani hit, skipping its ANI scatter")
         return
 
-    markers = ["o", "s", "^", "D", "v"]
-    shape = {p: markers[i % len(markers)] for i, p in enumerate(profilers)}
+    shape = {p: marker for p, (_c, marker) in profiler_style.styles(profilers).items()}
     cmap = matplotlib.colormaps[ABUNDANCE_CMAP]
     norm = Normalize(*(100 * a for a in abund_range))
     fig, ax = plt.subplots(figsize=(10.5, 6.0))
@@ -1744,7 +1745,8 @@ def render_ani_scatter(rows, profilers, category, out_pdf, out_png, abund_range,
         ax.spines[spine].set_visible(False)
 
     prof = [Line2D([], [], linestyle="", marker=shape[p], markerfacecolor="white",
-                   markeredgecolor="0.25", markersize=7, label=p) for p in profilers]
+                   markeredgecolor="0.25", markersize=7,
+                   label=profiler_style.display(p)) for p in profilers]
     ax.legend(handles=prof, title="profiler", fontsize=8, title_fontsize=8,
               frameon=False, loc="upper left")
     cbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02,
@@ -1864,7 +1866,8 @@ def render_heatmap(profiler, rows, label, samples, profiler_scores, truth,
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.set_title(f"Authentication vs ground truth — {profiler}", fontsize=11)
+    ax.set_title(f"Authentication vs ground truth — {profiler_style.display(profiler)}",
+                 fontsize=11)
 
     legend = [
         Patch(facecolor=CAT_COLOR["ancient"], label="ancient (in sample)"),
@@ -2120,7 +2123,7 @@ def summarise_jaccard(args, profilers, scores_by_profiler, samples, truth,
         rows, profilers,
         os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.pdf"),
         os.path.join(args.outdir, f"auth_jaccard_threshold{tag}.png"),
-        len(samples), adjust, fp_free)
+        adjust, fp_free)
     print_tsv(["threshold"] + list(profilers), rows, {p: 4 for p in profilers})
 
 

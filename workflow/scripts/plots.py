@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-import re
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -9,6 +9,9 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared" / "scripts"))
+import tool_style  # noqa: E402
 
 METRICS = [
     ("% Mapped endogenous reads", "mapped_endogenous"),
@@ -67,41 +70,33 @@ def k_eq(k):
 
 # --- helpers -----------------------------------------------------------------
 
-MARKERS = ["o", "s", "^", "D", "v", "P", "X", "<", ">", "*"]
-
-# Canonical tool order (from the config, via --tool) that pins each tool to the
-# same color and marker in every plot, whichever subset of tools a plot shows.
-TOOL_ORDER = []
-
-
-def _tool_key(name):
-    return re.sub(r" \(k=\d+\)$", "", str(name))
-
-
-def _style_slots(names):
-    """Map each name to a style slot: its position in TOOL_ORDER, or, for tools
-    missing from it, the next free slots in order of appearance."""
-    slots = {}
-    extra = len(TOOL_ORDER)
-    for n in dict.fromkeys(names):
-        key = _tool_key(n)
-        if key in TOOL_ORDER:
-            slots[n] = TOOL_ORDER.index(key)
-        else:
-            slots[n] = extra
-            extra += 1
-    return slots
+# Strobealign version names in config order (via --strobealign); they pin each
+# version to the same color and marker in every plot, whichever subset of tools
+# a plot shows. Aligner styles are fixed in shared/scripts/tool_style.py.
+STROBEALIGN_VERSIONS = []
 
 
 def _palette(names):
-    """Tool -> tab10 color, pinned by TOOL_ORDER."""
-    colors = sns.color_palette("tab10", n_colors=10)
-    return {n: colors[i % len(colors)] for n, i in _style_slots(names).items()}
+    """Tool -> color, shared with the metagenomic benchmark."""
+    return {n: c for n, (c, _m) in tool_style.styles(names, STROBEALIGN_VERSIONS).items()}
 
 
 def _markers(names):
-    """Tool -> marker, pinned by TOOL_ORDER."""
-    return {n: MARKERS[i % len(MARKERS)] for n, i in _style_slots(names).items()}
+    """Tool -> marker, shared with the metagenomic benchmark."""
+    return {n: m for n, (_c, m) in tool_style.styles(names, STROBEALIGN_VERSIONS).items()}
+
+
+def read_table(path):
+    """An accuracy or resource table with aligner names in display form.
+
+    The tables keep the raw program names ("bwaaln", "bwa mem (k=17)") so they
+    do not depend on presentation; renaming happens here, before any plotting.
+    """
+    df = pd.read_csv(path, sep="\t")
+    for col in ("Tool", "Base Name"):
+        if col in df.columns:
+            df[col] = df[col].map(lambda n: n if pd.isna(n) else tool_style.display(n))
+    return df
 
 
 def _split_baseline(df, x, baseline):
@@ -262,7 +257,7 @@ def _build_combined_frame(triples, score_threshold=None):
     """
     frames = []
     for path, row_label, col_label in triples:
-        df = pd.read_csv(path, sep="\t")
+        df = read_table(path)
         if score_threshold is not None and "Score Threshold" in df.columns:
             df = df[df["Score Threshold"] == score_threshold]
         df = df.copy()
@@ -336,7 +331,7 @@ def _build_summary_frame(pairs, *, k=None, score_threshold=None):
     """
     frames = []
     for path, short_name in pairs:
-        df = pd.read_csv(path, sep="\t")
+        df = read_table(path)
         if score_threshold is not None and "Score Threshold" in df.columns:
             df = df[df["Score Threshold"] == score_threshold]
         if k is not None:
@@ -353,7 +348,7 @@ def _build_summary_frame(pairs, *, k=None, score_threshold=None):
 
 
 # Tool treated as the reference for delta (difference) plots.
-SUMMARY_DELTA_BASELINE = "bwaaln"
+SUMMARY_DELTA_BASELINE = tool_style.display("bwaaln")
 
 # Friendlier metric labels for summary plot titles / axes. Keys are the table
 # column names; everything not listed is shown verbatim.
@@ -783,11 +778,12 @@ def main():
                         help="Dataset name, accuracy table path, resource table "
                              "path, genome, read length, variation, ground truth "
                              "BED (repeatable, used with --summary-pdf).")
-    parser.add_argument("--tool", action="append", default=[], dest="tools",
-                        help="Tool name in canonical order (repeatable); pins "
-                             "colors and markers across plots.")
+    parser.add_argument("--strobealign", action="append", default=[],
+                        dest="strobealign_versions",
+                        help="Strobealign version name, in config order "
+                             "(repeatable); pins its color and marker across plots.")
     args = parser.parse_args()
-    TOOL_ORDER.extend(args.tools)
+    STROBEALIGN_VERSIONS.extend(args.strobealign_versions)
 
     if args.combined_pdf:
         if not args.dataset:
@@ -808,8 +804,8 @@ def main():
     if args.input is None or args.output_dir is None:
         parser.error("--input and --output-dir are required unless --combined-pdf is set")
 
-    df = pd.read_csv(args.input, sep="\t")
-    res_df = pd.read_csv(args.resources, sep="\t") if args.resources else None
+    df = read_table(args.input)
+    res_df = read_table(args.resources) if args.resources else None
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # secondary-accuracy metrics are plotted only when present in the table

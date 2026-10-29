@@ -36,7 +36,6 @@ for version in config.get("versions", []):
             "arguments": f" {full_arg}" if full_arg else "",
             "name": display_name,
             "base_name": version["name"],
-            "color": version["color"],
             "binary": f"bin/strobealign/{version['commit']}",
             "k": k,
         }
@@ -61,14 +60,12 @@ if config["programs"]:
             PROGRAMS.append(prog)
 PLOTS = ("accuracy", "aligned", "time", "memory")
 
-# Canonical tool order passed to plots.py so every plot uses the same color and
-# marker for a tool.
-TOOL_ORDER = list(dict.fromkeys(
-    [v["base_name"] for v in VERSIONS.values()]
-    + [info["base_name"] for info in BWAMEM_K_PROGRAMS.values()]
-    + [p for p in config.get("programs", []) if not (p == "bwamem" and BWAMEM_K_PROGRAMS)]
-))
-TOOL_ARGS = " ".join(shlex.quote(f"--tool={name}") for name in TOOL_ORDER)
+# Strobealign version names in config order, passed to plots.py so every plot
+# uses the same color and marker for a version (shared/scripts/tool_style.py).
+STROBEALIGN_ORDER = list(dict.fromkeys(v["base_name"] for v in VERSIONS.values()))
+if len(STROBEALIGN_ORDER) > 5:
+    raise ValueError(f"at most 5 strobealign versions are supported, got {len(STROBEALIGN_ORDER)}")
+TOOL_ARGS = " ".join(shlex.quote(f"--strobealign={name}") for name in STROBEALIGN_ORDER)
 
 
 ACCURACY_METRICS = [

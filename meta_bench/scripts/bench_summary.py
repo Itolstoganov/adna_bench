@@ -48,6 +48,8 @@ import re
 import statistics as stats
 import sys
 
+import profiler_style
+
 # (profiler, stage, rule) for the rules that make up a taxonomic profiler. A new
 # backend needs one line here and nothing else.
 PROFILER_STAGES = (
@@ -409,7 +411,8 @@ def plot_resources(summaries, outdir):
     written = []
 
     def tick(profiler, *recs):
-        return profiler + ("*" if any(r["rule"].endswith("*") for r in recs) else "")
+        return (profiler_style.display(profiler)
+                + ("*" if any(r["rule"].endswith("*") for r in recs) else ""))
 
     if stages:
         names = list(stages)
