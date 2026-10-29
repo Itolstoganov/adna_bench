@@ -82,6 +82,7 @@ false negative.
 
 import argparse
 import collections
+import concurrent.futures
 import csv
 import gzip
 import importlib.util
@@ -706,17 +707,25 @@ def cache_for_profiler(cache, profiler, calls):
     return out
 
 
-def node_coverages(auth_dir, profiler, needed, scores, label, cached):
-    """(sample, key) -> (breadth, evenness) for `needed`, reusing `cached`."""
-    out, reused = {}, 0
+def node_coverages(auth_dir, profiler, needed, scores, label, cached, threads=1):
+    """(sample, key) -> (breadth, evenness) for `needed`, reusing `cached`.
+
+    Each measurement is a CPU-bound awk pass over a depth file of up to several
+    hundred MB, so the uncached ones run `threads` at a time (the work is in the
+    awk subprocesses, so threads are enough).
+    """
+    out, reused, todo = {}, 0, []
     for sample, key in needed:
         hit = (sample, label.get(key, key))
         if hit in cached:
             out[(sample, key)] = cached[hit]
             reused += 1
             continue
-        out[(sample, key)] = node_coverage(
-            os.path.join(auth_dir, profiler, sample, scores[(sample, key)]["taxid"]))
+        todo.append((sample, key))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        folders = [os.path.join(auth_dir, profiler, s, scores[(s, k)]["taxid"])
+                   for s, k in todo]
+        out.update(zip(todo, pool.map(node_coverage, folders)))
     if reused:
         print(f"  [{profiler}] coverage: {reused} node(s) from cache, "
               f"{len(needed) - reused} measured")
@@ -1967,6 +1976,9 @@ def parse_args(argv=None):
     ap.add_argument("--no-cache", action="store_true",
                     help="always remeasure breadth of coverage instead of "
                          "reusing an auth_calls.tsv already in --outdir")
+    ap.add_argument("--threads", type=int, default=8,
+                    help="breadth-of-coverage measurements to run at once "
+                         "(default 8)")
     ap.add_argument("--no-kraken-adjust", action="store_true",
                     help="Report the kraken-unajusted plots. Default (adjusted) is "
                          "the authentication-only view -- a taxon not included in the screen "
@@ -2032,7 +2044,8 @@ def summarise_profiler(profiler, args, auth_dir, samples, truth, host_keys,
     needed = {(s, k) for (s, k), rec in scores.items()
               if rec["score"] > 0 and (args.include_host or k not in host_keys)}
     coverage = node_coverages(auth_dir, profiler, needed, scores, label,
-                              cache_for_profiler(cache, profiler, calls))
+                              cache_for_profiler(cache, profiler, calls),
+                              args.threads)
     for row in calls:
         # kept on the row (render_row reads only the explicit columns, so it
         # reaches neither the TSV nor the cache comparison) because later

@@ -58,6 +58,8 @@ PROFILER_STAGES = (
     ("bowtie2", "taxonomic assignment", "NGSLCA/bowtie2"),
     ("bwa_aln", "alignment", "ALIGNMENT/bwa_aln"),
     ("bwa_aln", "taxonomic assignment", "NGSLCA/bwa_aln"),
+    ("bwa_mem", "alignment", "ALIGNMENT/bwa_mem"),
+    ("bwa_mem", "taxonomic assignment", "NGSLCA/bwa_mem"),
 )
 # Flat layout of single-aligner runs from before per-aligner directories.
 LEGACY_RULES = {"ALIGNMENT/strobealign": "ALIGNMENT", "NGSLCA/strobealign": "NGSLCA"}
@@ -70,9 +72,10 @@ SETUP_RULES = ("BUILD_MALT_DB", "COMPILE_STROBEALIGN", "REFERENCE_SUBSET",
 BENCHMARK_GLOBS = {
     "BOWTIE2_INDEX": "../results/REFERENCE_DB/*_BOWTIE2_BUILD.benchmark.txt",
 }
-# The one-off index each profiler's alignment step reads.
+# The one-off index each profiler's alignment step reads (bwa aln and mem share one).
 INDEX_RULES = {"malt": "BUILD_MALT_DB", "strobealign": "STROBEALIGN_INDEX",
-               "bowtie2": "BOWTIE2_INDEX", "bwa_aln": "BWA_INDEX"}
+               "bowtie2": "BOWTIE2_INDEX", "bwa_aln": "BWA_INDEX",
+               "bwa_mem": "BWA_INDEX"}
 # Upstream of every profiler, so it differentiates none of them -- but it sets
 # the pipeline's real memory ceiling, so it is worth showing.
 SHARED_RULES = ("KRAKENUNIQ", "FILTER_KRAKENUNIQ_OUTPUT", "CUTADAPT_ADAPTER_TRIMMING")
@@ -267,7 +270,8 @@ def phase_rows(rundir):
     for tool, patterns in [("ngsLCA", ["logs/NGSLCA/*.log"]),
                            ("ngsLCA (strobealign)", ["logs/NGSLCA/strobealign/*.log"]),
                            ("ngsLCA (bowtie2)", ["logs/NGSLCA/bowtie2/*.log"]),
-                           ("ngsLCA (bwa_aln)", ["logs/NGSLCA/bwa_aln/*.log"])]:
+                           ("ngsLCA (bwa_aln)", ["logs/NGSLCA/bwa_aln/*.log"]),
+                           ("ngsLCA (bwa_mem)", ["logs/NGSLCA/bwa_mem/*.log"])]:
         lca = [t for t in map(ngslca_log_walltime, _logs(rundir, *patterns))
                if t is not None]
         if lca:
