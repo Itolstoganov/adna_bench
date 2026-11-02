@@ -19,10 +19,10 @@ git submodule update --init meta_bench/aMeta \
 
 echo "[2/3] Conda env '$ENV_NAME' -----------------------------------------"
 if $CONDA env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-  echo "  exists; updating from workflow/envs/adna-eval.yml"
-  $CONDA env update -n "$ENV_NAME" -f workflow/envs/adna-eval.yml
+  echo "  exists; updating from simx/envs/adna-eval.yml"
+  $CONDA env update -n "$ENV_NAME" -f simx/envs/adna-eval.yml
 else
-  $CONDA env create -n "$ENV_NAME" -f workflow/envs/adna-eval.yml
+  $CONDA env create -n "$ENV_NAME" -f simx/envs/adna-eval.yml
 fi
 
 echo "[3/3] Building the gargammel fork (make) ----------------------------"

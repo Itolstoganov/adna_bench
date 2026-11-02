@@ -1,4 +1,4 @@
-# Shared gargammel simulation rules, reused by sim_bench (workflow/) and
+# Shared gargammel simulation rules, reused by sim_bench (simx/) and
 # meta_bench (meta_bench/workflow/). Both run from the repo root.
 #
 # Contract: before `include:`-ing this file, the including workflow must define a

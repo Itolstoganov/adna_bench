@@ -120,7 +120,7 @@ def _split_baseline(df, x, baseline):
 
 def plot_xy(df, x, y, *, output_path=None, pdf=None, filter=None,
             hue: str | None = "Tool", baseline_hue="Tool",
-            baseline=True, row=None, col=None, title=None):
+            baseline=True, row=None, col=None, title=None, **facet_options):
     """Plot line `y` against column `x`, grouped by `hue`, after `filter`.
 
     - `filter`: callable df -> df (default: identity).
@@ -128,8 +128,9 @@ def plot_xy(df, x, y, *, output_path=None, pdf=None, filter=None,
       horizontal dashed reference lines (single-axes) or dashed broadcast lines
       (faceted), colored/labeled by `baseline_hue`.
     - `row`/`col`: facet columns; when set, render with sns.relplot and write to
-      `pdf` (a PdfPages) if given, else to `output_path`.
-    - exactly one of `output_path` / `pdf` is used as the output target.
+      `pdf` (a PdfPages) and/or `output_path`. `facet_options` (row_order,
+      col_order, facet_title) are passed on to the faceted renderer.
+    - otherwise the plot is written to `output_path`.
     """
     if filter is not None:
         df = filter(df)
@@ -138,7 +139,8 @@ def plot_xy(df, x, y, *, output_path=None, pdf=None, filter=None,
 
     if row is not None or col is not None:
         _plot_faceted(df, x, y, output_path=output_path, pdf=pdf, hue=hue,
-                      baseline=baseline, row=row, col=col, title=title)
+                      baseline=baseline, row=row, col=col, title=title,
+                      **facet_options)
         return
 
     varying, base = _split_baseline(df, x, baseline)
@@ -173,8 +175,12 @@ def plot_xy(df, x, y, *, output_path=None, pdf=None, filter=None,
     plt.close()
 
 
-def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title):
-    """Faceted (row x col) line plot; k-less tools broadcast as dashed lines."""
+def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title,
+                  row_order=None, col_order=None, facet_title=None):
+    """Faceted (row x col) line plot; k-less tools broadcast as dashed lines.
+
+    `facet_title`, if given, maps (row_name, col_name) to the panel title.
+    """
     is_k_aware = df[x].notna()
     df = df.copy()
     df["k_aware"] = is_k_aware
@@ -205,10 +211,14 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
     facet_kwargs = {}
     if row is not None:
         facet_kwargs["row"] = row
-        facet_kwargs["row_order"] = sorted(plot_df[row].unique())
+        present = set(plot_df[row])
+        facet_kwargs["row_order"] = ([r for r in row_order if r in present]
+                                     if row_order is not None else sorted(present))
     if col is not None:
         facet_kwargs["col"] = col
-        facet_kwargs["col_order"] = sorted(plot_df[col].unique())
+        present = set(plot_df[col])
+        facet_kwargs["col_order"] = ([c for c in col_order if c in present]
+                                     if col_order is not None else sorted(present))
 
     g = sns.relplot(
         data=plot_df,
@@ -222,6 +232,11 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
     )
     g.set_axis_labels(x, y)
     g.set_titles(row_template="{row_name}", col_template="{col_name}")
+    if facet_title is not None:
+        for key, ax in g.axes_dict.items():
+            row_name, col_name = key if isinstance(key, tuple) else (
+                (key, None) if col is None else (None, key))
+            ax.set_title(facet_title(row_name, col_name))
     for ax in g.axes.flat:
         ax.set_xticks(x_values)
 
@@ -239,11 +254,14 @@ def _plot_faceted(df, x, y, *, output_path, pdf, hue, baseline, row, col, title)
         loc="center left", bbox_to_anchor=(1.0, 0.5), frameon=False,
     )
 
-    g.figure.suptitle(title if title is not None else y)
     g.tight_layout()
+    # placed above the tight layout, with a fixed gap over the top row titles
+    fig_height = g.figure.get_size_inches()[1]
+    g.figure.suptitle(title if title is not None else y, fontsize="x-large",
+                      y=1 + 0.35 / fig_height, va="bottom")
     if pdf is not None:
         pdf.savefig(g.figure, bbox_inches="tight")
-    else:
+    if output_path is not None:
         g.figure.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(g.figure)
 
@@ -272,30 +290,39 @@ def _build_combined_frame(triples, score_threshold=None):
     return df
 
 
-def plot_combined_k_pdf(dataset_inputs, output_path, score_threshold):
-    # dataset_inputs: list of (NAME, ACC_PATH, RES_PATH, ROW, COL)
-    acc_df = _build_combined_frame(
-        [(acc, row, col) for _, acc, _res, row, col in dataset_inputs],
-        score_threshold,
-    )
-    res_df = _build_combined_frame(
-        [(res, row, col) for _, _acc, res, row, col in dataset_inputs],
-    )
-    combined_metrics = COMBINED_K_METRICS
-    if acc_df is not None:
-        combined_metrics = with_secondary_if_present(combined_metrics, acc_df)
+def plot_combined_k(dataset_inputs, pdf, png_path, score_threshold):
+    """Metrics vs k, one panel per dataset (rows: reference and read length,
+    columns: variation).
 
-    with PdfPages(output_path) as pdf:
-        if acc_df is not None and not acc_df.empty:
-            for metric_col, _ in combined_metrics:
-                plot_xy(acc_df, x="k", y=metric_col, pdf=pdf,
-                        hue="Display", baseline=True,
-                        row="dataset_row", col="dataset_col", title=metric_col)
-        if res_df is not None and not res_df.empty:
-            for y_col, _file_name, title in RESOURCE_METRICS:
-                plot_xy(res_df, x="k", y=y_col, pdf=pdf,
-                        hue="Display", baseline=True,
-                        row="dataset_row", col="dataset_col", title=title)
+    `dataset_inputs` is a list of (ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION).
+    """
+    rows = {}
+    triples_acc, triples_res = [], []
+    for acc, res, genome, read_len, variation in dataset_inputs:
+        row = f"{genome}|{read_len}"
+        rows[row] = (genome, read_len)
+        col = _variation_label(variation)
+        triples_acc.append((acc, row, col))
+        triples_res.append((res, row, col))
+    col_order = sorted({c for _p, _r, c in triples_acc}, key=_variation_sort_key)
+    facet = dict(
+        row="dataset_row", col="dataset_col",
+        row_order=list(rows), col_order=col_order,
+        facet_title=lambda r, c: f"{rows[r][0]}, {c} variance, read length {rows[r][1]}",
+    )
+
+    acc_df = _build_combined_frame(triples_acc, score_threshold)
+    res_df = _build_combined_frame(triples_res)
+    if acc_df is not None and not acc_df.empty:
+        for metric_col, slug in with_secondary_if_present(COMBINED_K_METRICS, acc_df):
+            plot_xy(acc_df, x="k", y=metric_col, pdf=pdf,
+                    output_path=png_path(f"combined_k_{slug}"),
+                    hue="Display", baseline=True, title=metric_col, **facet)
+    if res_df is not None and not res_df.empty:
+        for y_col, slug, title in RESOURCE_METRICS:
+            plot_xy(res_df, x="k", y=y_col, pdf=pdf,
+                    output_path=png_path(f"combined_{slug}"),
+                    hue="Display", baseline=True, title=title, **facet)
 
 
 # --- summary plots (datasets on x axis) --------------------------------------
@@ -434,7 +461,7 @@ def plot_summary_metric(df, y, dataset_order, *, pdf=None, png_path=None,
 
 
 def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
-                     png_dir=None, num_reads=None):
+                     png_dir=None, num_reads=None, combined_k=False):
     # summary_inputs: list of (NAME, ACC_PATH, RES_PATH, GENOME, READ_LEN, VARIATION, GT_PATH)
     short_names = _build_short_names(
         [(genome, read_len, var) for _n, _a, _r, genome, read_len, var, _gt in summary_inputs]
@@ -539,6 +566,11 @@ def plot_summary_pdf(summary_inputs, output_path, k, score_threshold,
             acc_df["deam_fraction"] = acc_df["dataset"].map(deam_fraction_by_dataset)
             plot_deam_accuracy_diff(acc_df, variation_order, pdf=pdf,
                                     png_path=png_path("accuracy_deam_diff"))
+        if combined_k:
+            plot_combined_k(
+                [(acc, res, genome, read_len, var)
+                 for _n, acc, res, genome, read_len, var, _gt in summary_inputs],
+                pdf, png_path, score_threshold)
 
 
 def _variation_label(variation):
@@ -779,14 +811,6 @@ def main():
     parser.add_argument("--k-plot", action="store_true")
     parser.add_argument("--score-threshold", type=int, default=60)
     parser.add_argument("--k", type=int)
-    parser.add_argument("--combined-pdf", type=Path,
-                        help="Write a single combined PDF with k-plots for all "
-                             "datasets and selected metrics, then exit.")
-    parser.add_argument("--dataset", nargs=5, action="append", default=[],
-                        metavar=("NAME", "ACC_PATH", "RES_PATH", "ROW", "COL"),
-                        help="Dataset name, accuracy table path, resource table "
-                             "path, row label, column label (repeatable, used "
-                             "with --combined-pdf).")
     parser.add_argument("--summary-pdf", type=Path,
                         help="Write a single PDF with one summary plot per metric, "
                              "datasets on the x axis (at --main-k), then exit.")
@@ -795,6 +819,9 @@ def main():
                              "directory (used with --summary-pdf).")
     parser.add_argument("--main-k", type=int,
                         help="k value selected for the summary plots.")
+    parser.add_argument("--combined-k", action="store_true",
+                        help="Append metric-vs-k plots faceted over all datasets "
+                             "to the summary (used with --summary-pdf).")
     parser.add_argument("--num-reads", type=int,
                         help="Total reads per dataset (config); enables runtime-"
                              "per-base in the summary plots.")
@@ -811,24 +838,18 @@ def main():
     args = parser.parse_args()
     STROBEALIGN_VERSIONS.extend(args.strobealign_versions)
 
-    if args.combined_pdf:
-        if not args.dataset:
-            parser.error("--combined-pdf requires at least one --dataset entry")
-        args.combined_pdf.parent.mkdir(parents=True, exist_ok=True)
-        plot_combined_k_pdf(args.dataset, args.combined_pdf, args.score_threshold)
-        return
-
     if args.summary_pdf:
         if not args.summary_dataset:
             parser.error("--summary-pdf requires at least one --summary-dataset entry")
         args.summary_pdf.parent.mkdir(parents=True, exist_ok=True)
         plot_summary_pdf(args.summary_dataset, args.summary_pdf,
                          args.main_k, args.score_threshold,
-                         png_dir=args.summary_png_dir, num_reads=args.num_reads)
+                         png_dir=args.summary_png_dir, num_reads=args.num_reads,
+                         combined_k=args.combined_k)
         return
 
     if args.input is None or args.output_dir is None:
-        parser.error("--input and --output-dir are required unless --combined-pdf is set")
+        parser.error("--input and --output-dir are required unless --summary-pdf is set")
 
     df = read_table(args.input)
     res_df = read_table(args.resources) if args.resources else None

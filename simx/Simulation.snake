@@ -6,7 +6,7 @@ include: "rules/pipeline.smk"
 
 NUM_READS = config.get("num_reads", 100000)
 
-SCRIPTS = "workflow/scripts"
+SCRIPTS = "simx/scripts"
 SHARED_SCRIPTS = "shared/scripts"
 
 VARIATION_SETTINGS = {
@@ -56,7 +56,7 @@ rule all:
 rule download_ecoli50:
     output:
         "downloads/ecoli50/done.txt"
-    input: "workflow/data/ecoli-accessions.txt"
+    input: "simx/data/ecoli-accessions.txt"
     shell:
         "mkdir -p downloads/ecoli50; "
         "head -n 50 {input} > downloads/ecoli50/accessions.txt; "

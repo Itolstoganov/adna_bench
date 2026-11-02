@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for secondary-alignment accuracy in workflow/scripts/adna_accuracy.py.
+"""Unit tests for secondary-alignment accuracy in simx/scripts/adna_accuracy.py.
 
 A read is "secondary-correct" if its primary overlaps the truth OR some secondary
 alignment tied on the AS score with the primary overlaps the truth.
@@ -16,7 +16,7 @@ import tempfile
 
 import pysam
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "workflow", "scripts")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "simx", "scripts")))
 import adna_accuracy as A
 
 CHROM = "chr1"

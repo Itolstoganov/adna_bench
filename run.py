@@ -48,11 +48,11 @@ def main():
 
     if run_simulate:
         print("Running simulation...")
-        run_snakemake("workflow/Simulation.snake", config, args.cores, args.slurm, dry_run=args.dry_run)
+        run_snakemake("simx/Simulation.snake", config, args.cores, args.slurm, dry_run=args.dry_run)
 
     if run_benchmark:
         print("Running benchmark...")
-        run_snakemake("workflow/Benchmark.snake", config, args.cores, args.slurm,
+        run_snakemake("simx/Benchmark.snake", config, args.cores, args.slurm,
                       secondary_accuracy=args.secondary_accuracy, dry_run=args.dry_run)
 
     print("Done!")

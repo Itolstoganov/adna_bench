@@ -7,7 +7,7 @@ include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
 localrules:
-    plots, resources, index_resources, accuracy_tables, resource_tables, k_plots, combined_k_plots, summary_plots
+    plots, resources, index_resources, accuracy_tables, resource_tables, k_plots, summary_plots
 
 MODES = config.get("modes", ("align"))
 ENDS = config.get("ends", ("pe"))
@@ -134,14 +134,22 @@ SUMMARY_PNG_METRICS = (
     + ["outcome", "outcome_deam", "accuracy_deam_diff"]
 )
 
+# Per-dataset metrics vs k, faceted over all datasets (multi-k runs only).
+COMBINED_K_PNG_METRICS = [
+    "combined_k_accuracy", "combined_k_accuracy_deam",
+    "combined_k_mapped_endogenous", "combined_k_mapped_endogenous_deam",
+    "combined_k_runtime", "combined_k_memory",
+]
+SUMMARY_PNGS = SUMMARY_PNG_METRICS + (COMBINED_K_PNG_METRICS if HAS_MULTI_K else [])
+
 rule final:
     input:
         expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
         expand("result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else [],
-        "result/combined_k_plots.pdf" if HAS_MULTI_K else [],
-        "result/summary_plots.pdf"
+        "result/summary_plots.pdf",
+        expand("result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
 
 
 rule run_adna_accuracy:
@@ -268,7 +276,7 @@ rule plots:
         k=config.get("main_k", 17),
         tool_args=TOOL_ARGS
     shell:
-        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k {params.k} {params.tool_args}"
+        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k {params.k} {params.tool_args}"
 
 
 rule k_plots:
@@ -281,30 +289,7 @@ rule k_plots:
         threshold=config.get("main_score_threshold", 60),
         tool_args=TOOL_ARGS
     shell:
-        "python workflow/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold} {params.tool_args}"
-
-
-def _combined_dataset_label(dataset_id):
-    """Row label for the combined PDF: dataset minus the variation suffix."""
-    cfg = DATASET_CONFIGS[dataset_id]
-    return f"{cfg['endogenous_genome']}_{cfg['contaminant_genome']}_{cfg['bacterial_db']}_len{cfg['read_length']}"
-
-
-rule combined_k_plots:
-    output:
-        "result/combined_k_plots.pdf"
-    input:
-        accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
-        resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS)
-    params:
-        threshold=config.get("main_score_threshold", 60),
-        tool_args=TOOL_ARGS,
-        dataset_args=lambda wildcards, input: " ".join(
-            f"--dataset {d} {acc} {res} {_combined_dataset_label(d)} {DATASET_CONFIGS[d]['endogenous_variation']}"
-            for d, acc, res in zip(DATASET_IDS, input.accuracy, input.resources)
-        )
-    shell:
-        "python workflow/scripts/plots.py --combined-pdf {output} --score-threshold {params.threshold} {params.dataset_args} {params.tool_args}"
+        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold} {params.tool_args}"
 
 
 def _summary_dataset_arg(dataset_id, acc, res, gt):
@@ -321,7 +306,7 @@ def _summary_dataset_arg(dataset_id, acc, res, gt):
 rule summary_plots:
     output:
         pdf="result/summary_plots.pdf",
-        pngs=expand("result/summary_plots/{metric}.png", metric=SUMMARY_PNG_METRICS)
+        pngs=expand("result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
     input:
         accuracy=expand("result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
         resources=expand("result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
@@ -331,12 +316,13 @@ rule summary_plots:
         main_k=config.get("main_k", 17),
         num_reads=config.get("num_reads"),
         tool_args=TOOL_ARGS,
+        combined_k="--combined-k" if HAS_MULTI_K else "",
         dataset_args=lambda wildcards, input: " ".join(
             _summary_dataset_arg(d, acc, res, gt)
             for d, acc, res, gt in zip(DATASET_IDS, input.accuracy, input.resources, input.ground_truth)
         )
     shell:
-        "python workflow/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.dataset_args} {params.tool_args}"
+        "python simx/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.combined_k} {params.dataset_args} {params.tool_args}"
 
 
 def index_log(wildcards):
