@@ -8,4 +8,4 @@ dependencies:
   - fastp
   - ngsLCA
   - samtools
-  - bowtie2
+  - bowtie2=2.5.5
