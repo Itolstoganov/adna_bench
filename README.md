@@ -1,4 +1,4 @@
-# adna_bench
+# Benchmarks and simulation code used in the Hybrid RY-mers increase aDNA alignment sensitivity study
 
 Benchmarks for ancient-DNA tools on [gargammel](https://github.com/grenaud/gargammel)-simulated reads with per-read ground truth.
 
