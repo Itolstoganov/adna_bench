@@ -4,10 +4,10 @@
 # Contract: before `include:`-ing this file, the including workflow must define a
 # dict `GARGAMMEL_REGISTRY` mapping an output prefix ("simdir") to a params dict:
 #
-#   GARGAMMEL_REGISTRY["datasets/foo"] = {
-#       "endo": ["genomes/foo.fa"],        # list of endogenous FASTAs
-#       "cont": ["genomes/bar.fa"],        # list of contaminant FASTAs
-#       "bact_dir": "gargammel_data/k14/fasta",   # sim_bench: symlink dir as bact/
+#   GARGAMMEL_REGISTRY["simx/datasets/foo"] = {
+#       "endo": ["simx/genomes/foo.fa"],        # list of endogenous FASTAs
+#       "cont": ["simx/genomes/bar.fa"],        # list of contaminant FASTAs
+#       "bact_dir": "simx/data/gargammel/k14/fasta",   # sim_bench: symlink dir as bact/
 #       # --- OR, for explicit composition (meta_bench): ---
 #       "bact_list": "…/list", "bact_genome_dir": "meta_bench/genomes",
 #       "num": 500000, "comp": "0.2,0.0,0.8",

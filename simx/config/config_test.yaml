@@ -9,7 +9,7 @@ datasets:
 
 num_reads: 5000
 score_thresholds: [25, 30, 35, 40]
-# Optional secondary-alignment accuracy (off by default; see configs/config.yaml).
+# Optional secondary-alignment accuracy (off by default; see simx/config/config.yaml).
 secondary_accuracy: false
 
 versions:

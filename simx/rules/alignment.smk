@@ -16,7 +16,7 @@
 #         "arguments": f" {arg}" if arg else "",
 #         "name": version["name"],
 #         "color": version["color"],
-#         "binary": f"bin/strobealign/{version['commit']}",
+#         "binary": f"simx/bin/strobealign/{version['commit']}",
 #     }
 
 # PROGRAMS = expand("strobealign-{key}", key=VERSIONS.keys())
@@ -55,19 +55,19 @@ rule bwa_index:
 # Fix runtime measurements
 rule bwa_aln_paired_end:
     output:
-        bam="runs/bwaaln/{dataset_id}/pe.bam",
-        sai1=temp("runs/bwaaln/{dataset_id}/1.sai"),
-        sai2=temp("runs/bwaaln/{dataset_id}/2.sai")
+        bam="simx/runs/bwaaln/{dataset_id}/pe.bam",
+        sai1=temp("simx/runs/bwaaln/{dataset_id}/1.sai"),
+        sai2=temp("simx/runs/bwaaln/{dataset_id}/2.sai")
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz"
     params:
         opt="-n 0.01 -o 2 -l 1024"
     threads: 8
     log:
-        "runs/bwaaln/{dataset_id}/pe.bam.log"
+        "simx/runs/bwaaln/{dataset_id}/pe.bam.log"
     shell:
         # "cat {input} > /dev/null; "
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
@@ -81,18 +81,18 @@ rule bwa_aln_paired_end:
 
 rule bwa_aln_single_end:
     output:
-        bam="runs/bwaaln/{dataset_id}/se.bam",
-        sai1=temp("runs/bwaaln/{dataset_id}/se.sai")
-        # sai2=temp("runs/bwaaln/{dataset_id}/2.sai")
+        bam="simx/runs/bwaaln/{dataset_id}/se.bam",
+        sai1=temp("simx/runs/bwaaln/{dataset_id}/se.sai")
+        # sai2=temp("simx/runs/bwaaln/{dataset_id}/2.sai")
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz"
     params:
         opt="-n 0.01 -o 2 -l 1024"
     threads: 8
     log:
-        "runs/bwaaln/{dataset_id}/se.bam.log"
+        "simx/runs/bwaaln/{dataset_id}/se.bam.log"
     shell:
         # "cat {input} > /dev/null; "
         "\n /usr/bin/time -v bwa aln -t {threads} {params.opt} {input.fasta} {input.r1_fastq} > {output.sai1} 2> {log}.tmp"
@@ -105,15 +105,15 @@ rule bwa_aln_single_end:
 
 rule bwa_mem_paired_end:
     output:
-        bam="runs/bwamem/{dataset_id}/pe.bam"
+        bam="simx/runs/bwamem/{dataset_id}/pe.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz",
     threads: 8
     log:
-        "runs/bwamem/{dataset_id}/pe.bam.log"
+        "simx/runs/bwamem/{dataset_id}/pe.bam.log"
     params:
         adna="-k 19 -r 2.5"
     shell:
@@ -127,14 +127,14 @@ rule bwa_mem_paired_end:
 
 rule bwa_mem_single_end:
     output:
-        bam="runs/bwamem/{dataset_id}/se.bam"
+        bam="simx/runs/bwamem/{dataset_id}/se.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz"
     threads: 8
     log:
-        "runs/bwamem/{dataset_id}/se.bam.log"
+        "simx/runs/bwamem/{dataset_id}/se.bam.log"
     params:
         adna="-k 15 -r 2.5",
         secondary=lambda wildcards: "-a" if SECONDARY_ACCURACY else ""
@@ -149,15 +149,15 @@ rule bwa_mem_single_end:
 
 rule bwa_mem_k_paired_end:
     output:
-        bam="runs/bwamem-k{k}/{dataset_id}/pe.bam"
+        bam="simx/runs/bwamem-k{k}/{dataset_id}/pe.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz",
     threads: 8
     log:
-        "runs/bwamem-k{k}/{dataset_id}/pe.bam.log"
+        "simx/runs/bwamem-k{k}/{dataset_id}/pe.bam.log"
     params:
         adna=lambda wildcards: f"-k {wildcards.k} -r 2.5"
     shell:
@@ -171,14 +171,14 @@ rule bwa_mem_k_paired_end:
 
 rule bwa_mem_k_single_end:
     output:
-        bam="runs/bwamem-k{k}/{dataset_id}/se.bam"
+        bam="simx/runs/bwamem-k{k}/{dataset_id}/se.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.bwt",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.bwt",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz"
     threads: 8
     log:
-        "runs/bwamem-k{k}/{dataset_id}/se.bam.log"
+        "simx/runs/bwamem-k{k}/{dataset_id}/se.bam.log"
     params:
         adna=lambda wildcards: f"-k {wildcards.k} -r 2.5",
         secondary=lambda wildcards: "-a" if SECONDARY_ACCURACY else ""
@@ -205,17 +205,17 @@ rule bowtie2_index:
 
 rule bowtie2_paired_end:
     output:
-        bam="runs/bowtie2/{dataset_id}/pe.bam"
+        bam="simx/runs/bowtie2/{dataset_id}/pe.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.1.bt2",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.1.bt2",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz"
     params:
         opt="--local --very-sensitive-local"
     threads: 8
     log:
-        "runs/bowtie2/{dataset_id}/pe.bam.log"
+        "simx/runs/bowtie2/{dataset_id}/pe.bam.log"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v bowtie2 -p {threads} {params.opt} -x {input.fasta}"
@@ -228,16 +228,16 @@ rule bowtie2_paired_end:
 
 rule bowtie2_single_end:
     output:
-        bam="runs/bowtie2/{dataset_id}/se.bam"
+        bam="simx/runs/bowtie2/{dataset_id}/se.bam"
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        index="datasets/{dataset_id}/ref.fa.1.bt2",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        index="simx/datasets/{dataset_id}/ref.fa.1.bt2",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz"
     params:
         opt="--local --very-sensitive-local"
     threads: 8
     log:
-        "runs/bowtie2/{dataset_id}/se.bam.log"
+        "simx/runs/bowtie2/{dataset_id}/se.bam.log"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v bowtie2 -p {threads} {params.opt} -x {input.fasta}"
@@ -251,7 +251,7 @@ rule bowtie2_single_end:
 # Map reads with strobealign
 
 # rule compile_strobealign:
-#     output: "bin/strobealign/{commit}"
+#     output: "simx/bin/strobealign/{commit}"
 #     threads: 4
 #     shell:
 #         """
@@ -268,7 +268,7 @@ rule bowtie2_single_end:
 
 # todo release/debug option?
 rule compile_strobealign:
-    output: "bin/strobealign/{commit}"
+    output: "simx/bin/strobealign/{commit}"
     threads: 4
     shell:
         """
@@ -284,17 +284,17 @@ rule compile_strobealign:
 
 rule strobealign_paired_end:
     output:
-        bam="runs/strobealign-{program}/{dataset_id}/pe.bam"
+        bam="simx/runs/strobealign-{program}/{dataset_id}/pe.bam"
     input:
         binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
-        fasta="datasets/{dataset_id}/ref.fa",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz",
     params:
         extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"]
     threads: 8
     log:
-        "runs/strobealign-{program}/{dataset_id}/pe.bam.log"
+        "simx/runs/strobealign-{program}/{dataset_id}/pe.bam.log"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v {input.binary}{params.extra_args} -v -t {threads} {input.fasta} {input.r1_fastq} {input.r2_fastq} 2> {log}.tmp"
@@ -306,17 +306,17 @@ rule strobealign_paired_end:
 
 rule strobealign_single_end:
     output:
-        bam="runs/strobealign-{program}/{dataset_id}/se.bam"
+        bam="simx/runs/strobealign-{program}/{dataset_id}/se.bam"
     input:
         binary=lambda wildcards: VERSIONS[wildcards.program]["binary"],
-        fasta="datasets/{dataset_id}/ref.fa",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz"
     params:
         extra_args=lambda wildcards: VERSIONS[wildcards.program]["arguments"],
         secondary=lambda wildcards: strobealign_secondary_args(VERSIONS[wildcards.program]["arguments"])
     threads: 8
     log:
-        "runs/strobealign-{program}/{dataset_id}/se.bam.log"
+        "simx/runs/strobealign-{program}/{dataset_id}/se.bam.log"
     shell:
         "cat {input} > /dev/null; "
         "/usr/bin/time -v {input.binary}{params.extra_args}{params.secondary} -v -t {threads} {input.fasta} {input.r1_fastq} 2> {log}.tmp"
@@ -328,7 +328,7 @@ rule strobealign_single_end:
 
 rule safari_install:
     output:
-        bin="bin/safari/vg"
+        bin="simx/bin/safari/vg"
     shell:
         """
         wget https://github.com/grenaud/SAFARI/releases/download/v1.0.1/vg
@@ -340,20 +340,20 @@ rule safari_install:
 rule safari_index_linear:
     #todo are all these really necessary
     input:
-        safari="bin/safari/vg",
-        fasta="datasets/{dataset_id}/ref.fa"
+        safari="simx/bin/safari/vg",
+        fasta="simx/datasets/{dataset_id}/ref.fa"
     output:
-        vg="datasets/{dataset_id}/safari/ref.vg",
-        og="datasets/{dataset_id}/safari/ref.og",
-        gfa="datasets/{dataset_id}/safari/ref.gfa",
-        dist="datasets/{dataset_id}/safari/ref.dist",
-        xg="datasets/{dataset_id}/safari/ref.xg",
-        gbz="datasets/{dataset_id}/safari/ref.gbz",
-        gg="datasets/{dataset_id}/safari/ref.gg",
-        gbwt="datasets/{dataset_id}/safari/ref.gbwt",
-        min="datasets/{dataset_id}/safari/ref.min",
-        ry="datasets/{dataset_id}/safari/ref.ry",
-        time="datasets/{dataset_id}/safari/ref.index.log"
+        vg="simx/datasets/{dataset_id}/safari/ref.vg",
+        og="simx/datasets/{dataset_id}/safari/ref.og",
+        gfa="simx/datasets/{dataset_id}/safari/ref.gfa",
+        dist="simx/datasets/{dataset_id}/safari/ref.dist",
+        xg="simx/datasets/{dataset_id}/safari/ref.xg",
+        gbz="simx/datasets/{dataset_id}/safari/ref.gbz",
+        gg="simx/datasets/{dataset_id}/safari/ref.gg",
+        gbwt="simx/datasets/{dataset_id}/safari/ref.gbwt",
+        min="simx/datasets/{dataset_id}/safari/ref.min",
+        ry="simx/datasets/{dataset_id}/safari/ref.ry",
+        time="simx/datasets/{dataset_id}/safari/ref.index.log"
     threads:
         16
     shell:
@@ -374,19 +374,19 @@ rule safari_index_linear:
 rule safari_single_end:
     # todo use more suitable damage profiles
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        deam_3p="safari_data/jeong_2020_cell_SHG003_MT_3p.prof",
-        deam_5p="safari_data/jeong_2020_cell_SHG003_MT_5p.prof",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        min="datasets/{dataset_id}/safari/ref.min",
-        dist="datasets/{dataset_id}/safari/ref.dist",
-        ry="datasets/{dataset_id}/safari/ref.ry",
-        gbz="datasets/{dataset_id}/safari/ref.gbz",
-        safari="bin/safari/vg"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        deam_3p="simx/data/safari/jeong_2020_cell_SHG003_MT_3p.prof",
+        deam_5p="simx/data/safari/jeong_2020_cell_SHG003_MT_5p.prof",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        min="simx/datasets/{dataset_id}/safari/ref.min",
+        dist="simx/datasets/{dataset_id}/safari/ref.dist",
+        ry="simx/datasets/{dataset_id}/safari/ref.ry",
+        gbz="simx/datasets/{dataset_id}/safari/ref.gbz",
+        safari="simx/bin/safari/vg"
     output:
-        bam="runs/safari/{dataset_id}/se.bam"
+        bam="simx/runs/safari/{dataset_id}/se.bam"
     log:
-        "runs/safari/{dataset_id}/se.bam.log"
+        "simx/runs/safari/{dataset_id}/se.bam.log"
     params:
         j=0.5
     threads:
@@ -406,20 +406,20 @@ rule safari_single_end:
 rule safari_paired_end:
     # todo use more suitable damage profiles
     input:
-        fasta="datasets/{dataset_id}/ref.fa",
-        deam_3p="safari_data/jeong_2020_cell_SHG003_MT_3p.prof",
-        deam_5p="safari_data/jeong_2020_cell_SHG003_MT_5p.prof",
-        r1_fastq="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2_fastq="datasets/{dataset_id}/fastp/2.fq.gz",
-        min="datasets/{dataset_id}/safari/ref.min",
-        dist="datasets/{dataset_id}/safari/ref.dist",
-        ry="datasets/{dataset_id}/safari/ref.ry",
-        gbz="datasets/{dataset_id}/safari/ref.gbz",
-        safari="bin/safari/vg"
+        fasta="simx/datasets/{dataset_id}/ref.fa",
+        deam_3p="simx/data/safari/jeong_2020_cell_SHG003_MT_3p.prof",
+        deam_5p="simx/data/safari/jeong_2020_cell_SHG003_MT_5p.prof",
+        r1_fastq="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2_fastq="simx/datasets/{dataset_id}/fastp/2.fq.gz",
+        min="simx/datasets/{dataset_id}/safari/ref.min",
+        dist="simx/datasets/{dataset_id}/safari/ref.dist",
+        ry="simx/datasets/{dataset_id}/safari/ref.ry",
+        gbz="simx/datasets/{dataset_id}/safari/ref.gbz",
+        safari="simx/bin/safari/vg"
     output:
-        bam="runs/safari/{dataset_id}/pe.bam"
+        bam="simx/runs/safari/{dataset_id}/pe.bam"
     log:
-        "runs/safari/{dataset_id}/pe.bam.log"
+        "simx/runs/safari/{dataset_id}/pe.bam.log"
     params:
         j=0.5
     threads:
@@ -446,21 +446,21 @@ rule safari_paired_end:
 #             if prog == "xmapper" and wildcards.genome == "rye":
 #                 # X-Mapper crashes on rye
 #                 continue
-#             files.append(f"csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.bam.csv")
+#             files.append(f"simx/csv/{prog}/{dataset}-{wildcards.genome}-{read_length}/{wildcards.ends}.bam.csv")
 #     if "map" in MODES:
 #         if wildcards.ends == "se":
 #                read_lengths = READ_LENGTHS
 #         else:
 #             read_lengths = [rl for rl in READ_LENGTHS if rl < LONG_READ_LENGTH]
 #         files += expand(
-#             f"csv/{{prog}}/{{dataset}}-{wildcards.genome}-{{read_length}}/{wildcards.ends}.paf.csv",
+#             f"simx/csv/{{prog}}/{{dataset}}-{wildcards.genome}-{{read_length}}/{wildcards.ends}.paf.csv",
 #             prog=(prog for prog in PROGRAMS if prog not in {"bwamem", "xmapper"}), dataset=DATASETS, read_length=read_lengths
 #         )
 #     return files
 
 
 # rule concat_csvs:
-#     output: "csv/{genome,([^/]*)}-{ends,(se|pe)}.csv"
+#     output: "simx/csv/{genome,([^/]*)}-{ends,(se|pe)}.csv"
 #     input: csvs
 #     shell:
 #         "( echo tool,mode,dataset,genome,ends,read_length,read_count,aligned,overaligned,accuracy,jaccuracy,saccuracy,time,memory ; cat {input} ) > {output}"
@@ -468,7 +468,7 @@ rule safari_paired_end:
 
 # rule concat_genome_csvs:
 #     output: "result.csv"
-#     input: expand("csv/{genome}-{ends}.csv", ends=ENDS, genome=GENOMES)
+#     input: expand("simx/csv/{genome}-{ends}.csv", ends=ENDS, genome=GENOMES)
 #     shell:
 #         "( head -n 1 {input[0]} ; for f in {input}; do sed 1d $f; done ) > {output}"
 

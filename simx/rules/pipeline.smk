@@ -1,4 +1,4 @@
-configfile: "configs/config.yaml"
+configfile: "simx/config/config.yaml"
 
 
 def expand_datasets(dataset_configs):

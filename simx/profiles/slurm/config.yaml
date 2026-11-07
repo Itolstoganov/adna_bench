@@ -1,4 +1,4 @@
-# SLURM profile to be used with 'snakemake --profile=slurm'
+# SLURM profile: snakemake --profile simx/profiles/slurm
 
 executor: slurm
 

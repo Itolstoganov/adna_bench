@@ -42,7 +42,7 @@ RAM_GB="${RAM_GB:-156}"
 N_SAMPLES="${N_SAMPLES:-10}"
 CONDA="${CONDA:-conda}"
 SIM_ENV="${SIM_ENV:-adna-eval}"
-SIM_ENV_YML="$REPO_ROOT/simx/envs/adna-eval.yml"
+SIM_ENV_YML="$REPO_ROOT/shared/envs/adna-eval.yml"
 AMETA_ENV="${AMETA_ENV:-aMeta}"
 AMETA_ENV_YML="$AMETA_DIR/workflow/envs/environment.yaml"
 

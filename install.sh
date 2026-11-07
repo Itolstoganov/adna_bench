@@ -19,10 +19,10 @@ git submodule update --init meta_bench/aMeta \
 
 echo "[2/3] Conda env '$ENV_NAME' -----------------------------------------"
 if $CONDA env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-  echo "  exists; updating from simx/envs/adna-eval.yml"
-  $CONDA env update -n "$ENV_NAME" -f simx/envs/adna-eval.yml
+  echo "  exists; updating from shared/envs/adna-eval.yml"
+  $CONDA env update -n "$ENV_NAME" -f shared/envs/adna-eval.yml
 else
-  $CONDA env create -n "$ENV_NAME" -f simx/envs/adna-eval.yml
+  $CONDA env create -n "$ENV_NAME" -f shared/envs/adna-eval.yml
 fi
 
 echo "[3/3] Building the gargammel fork (make) ----------------------------"
@@ -39,7 +39,10 @@ cat <<EOF
 Done. Next:
   conda activate $ENV_NAME
 
-  # Simulate the metagenomic datasets (writes meta_bench/results/sim/):
+  # Aligner benchmark (simx): simulate + benchmark
+  simx/run.py --cores 8            # --test for a small run, --slurm for SLURM
+
+  # Metagenomic benchmark: simulate the metagenomic datasets (writes meta_bench/results/sim/):
   snakemake -s meta_bench/workflow/Simulation.snake --cores 8
 
   # Benchmark (needs aMeta + its databases): see meta_bench/README.md

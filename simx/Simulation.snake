@@ -1,6 +1,6 @@
 from itertools import product
 
-configfile: "configs/config.yaml"
+configfile: "simx/config/config.yaml"
 
 include: "rules/pipeline.smk"
 
@@ -22,13 +22,13 @@ VARIATION_SETTINGS = {
 
 
 # Register each dataset with the shared gargammel_simulate rule. Keyed by the
-# per-dataset output prefix "simdir" = datasets/{dataset_id}.
+# per-dataset output prefix "simdir" = simx/datasets/{dataset_id}.
 GARGAMMEL_REGISTRY = {}
 for _did, _p in DATASET_CONFIGS.items():
-    GARGAMMEL_REGISTRY[f"datasets/{_did}"] = {
-        "endo": [f"genomes/{_p['endogenous_genome']}.fa"],
-        "cont": [f"genomes/{_p['contaminant_genome']}.fa"],
-        "bact_dir": f"gargammel_data/{_p['bacterial_db']}/fasta",
+    GARGAMMEL_REGISTRY[f"simx/datasets/{_did}"] = {
+        "endo": [f"simx/genomes/{_p['endogenous_genome']}.fa"],
+        "cont": [f"simx/genomes/{_p['contaminant_genome']}.fa"],
+        "bact_dir": f"simx/data/gargammel/{_p['bacterial_db']}/fasta",
         "num": NUM_READS,
         "comp": ",".join(map(str, _p["proportions"])),
         "gargammel_args": f"-l {_p['read_length']} -damage 0.03,0.4,0.01,0.3",
@@ -40,45 +40,45 @@ include: "../shared/rules/gargammel.smk"
 
 rule all:
     input:
-        expand("datasets/{dataset_id}/fastp/1.fq.gz", dataset_id=DATASET_IDS),
-        expand("datasets/{dataset_id}/fastp/2.fq.gz", dataset_id=DATASET_IDS),
-        expand("datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS),
-        expand("datasets/{dataset_id}/ref_damage.bed", dataset_id=DATASET_IDS),
-        expand("datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
+        expand("simx/datasets/{dataset_id}/fastp/1.fq.gz", dataset_id=DATASET_IDS),
+        expand("simx/datasets/{dataset_id}/fastp/2.fq.gz", dataset_id=DATASET_IDS),
+        expand("simx/datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS),
+        expand("simx/datasets/{dataset_id}/ref_damage.bed", dataset_id=DATASET_IDS),
+        expand("simx/datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
 
 
 # rule simulate_genomes:
 #     input:
-#         ref="genomes/{genome}.fa"
+#         ref="simx/genomes/{genome}.fa"
 
 
 # from https://github.com/NBISweden/strobealign-evaluation 
 rule download_ecoli50:
     output:
-        "downloads/ecoli50/done.txt"
+        "simx/downloads/ecoli50/done.txt"
     input: "simx/data/ecoli-accessions.txt"
     shell:
-        "mkdir -p downloads/ecoli50; "
-        "head -n 50 {input} > downloads/ecoli50/accessions.txt; "
-        "ncbi-genome-download -o downloads/ecoli50 -A downloads/ecoli50/accessions.txt --formats fasta --flat-output bacteria; "
-        "touch downloads/ecoli50/done.txt"
+        "mkdir -p simx/downloads/ecoli50; "
+        "head -n 50 {input} > simx/downloads/ecoli50/accessions.txt; "
+        "ncbi-genome-download -o simx/downloads/ecoli50 -A simx/downloads/ecoli50/accessions.txt --formats fasta --flat-output bacteria; "
+        "touch simx/downloads/ecoli50/done.txt"
 
 rule filter_ecoli50:
-    output: "genomes/ecoli50.fa"
-    input: "downloads/ecoli50/done.txt"
+    output: "simx/genomes/ecoli50.fa"
+    input: "simx/downloads/ecoli50/done.txt"
     shell:
-        "python {SCRIPTS}/noplasmids.py downloads/ecoli50/*.fna.gz > {output}"
+        "python {SCRIPTS}/noplasmids.py simx/downloads/ecoli50/*.fna.gz > {output}"
 
 
 rule mason_variator:
     output:
-        vcf="genomes/{var}/{genome}.vcf"
+        vcf="simx/genomes/{var}/{genome}.vcf"
     input:
-        fasta="genomes/{genome}.fa",
-        fai="genomes/{genome}.fa.fai",
+        fasta="simx/genomes/{genome}.fa",
+        fai="simx/genomes/{genome}.fa.fai",
     params:
         variation_settings=lambda wildcards: VARIATION_SETTINGS[wildcards.var],
-        outdir="genomes/{var}"
+        outdir="simx/genomes/{var}"
     shell:
         """
         mkdir -p {params.outdir}
@@ -93,13 +93,13 @@ rule mason_variator:
 
 rule fastp_process:
     input:
-        s1="datasets/{dataset_id}/simulated_s1.fq.gz",
-        s2="datasets/{dataset_id}/simulated_s2.fq.gz"
+        s1="simx/datasets/{dataset_id}/simulated_s1.fq.gz",
+        s2="simx/datasets/{dataset_id}/simulated_s2.fq.gz"
     output:
-        o1="datasets/{dataset_id}/fastp/1.fq.gz",
-        o2="datasets/{dataset_id}/fastp/2.fq.gz",
-        html="datasets/{dataset_id}/fastp/fastp.html",
-        json="datasets/{dataset_id}/fastp/fastp.json"
+        o1="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        o2="simx/datasets/{dataset_id}/fastp/2.fq.gz",
+        html="simx/datasets/{dataset_id}/fastp/fastp.html",
+        json="simx/datasets/{dataset_id}/fastp/fastp.json"
     threads: 4
     shell:
         """
@@ -112,13 +112,13 @@ rule fastp_process:
 
 rule parse_ground_truth:
     input:
-        r1="datasets/{dataset_id}/fastp/1.fq.gz",
-        r2="datasets/{dataset_id}/fastp/2.fq.gz"
+        r1="simx/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2="simx/datasets/{dataset_id}/fastp/2.fq.gz"
     output:
-        gt="datasets/{dataset_id}/endo_ground_truth.bed",
-        damage="datasets/{dataset_id}/endo_damage.bed"
+        gt="simx/datasets/{dataset_id}/endo_ground_truth.bed",
+        damage="simx/datasets/{dataset_id}/endo_damage.bed"
     params:
-        input_dir=lambda wc: f"datasets/{wc.dataset_id}"
+        input_dir=lambda wc: f"simx/datasets/{wc.dataset_id}"
     shell:
         """
         python {SHARED_SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} \
@@ -127,18 +127,18 @@ rule parse_ground_truth:
 
 
 rule samtools_faidx:
-    output: "genomes/{genome}.fa.fai"
-    input: "genomes/{genome}.fa"
+    output: "simx/genomes/{genome}.fa.fai"
+    input: "simx/genomes/{genome}.fa"
     shell: "samtools faidx {input}"
 
 
 rule convert_vcf:
-    input: "genomes/{var}/{ref}.vcf"
+    input: "simx/genomes/{var}/{ref}.vcf"
     output: 
-        vcf="genomes/{var}/{ref}-fixed.vcf.gz",
-        tbi="genomes/{var}/{ref}-fixed.vcf.gz.tbi"
+        vcf="simx/genomes/{var}/{ref}-fixed.vcf.gz",
+        tbi="simx/genomes/{var}/{ref}-fixed.vcf.gz.tbi"
     params: 
-        tmp_out="genomes/{var}/{ref}-fixed.vcf"
+        tmp_out="simx/genomes/{var}/{ref}-fixed.vcf"
     shell: 
         """
         {SCRIPTS}/add_vcf_format.py -i {input} -o "{params.tmp_out}"
@@ -149,15 +149,15 @@ rule convert_vcf:
 
 rule ref_transform:
     input:
-        fasta="genomes/{ref}.fa",
-        vcf="genomes/{var}/{ref}-fixed.vcf.gz",
-        tbi="genomes/{var}/{ref}-fixed.vcf.gz.tbi"
+        fasta="simx/genomes/{ref}.fa",
+        vcf="simx/genomes/{var}/{ref}-fixed.vcf.gz",
+        tbi="simx/genomes/{var}/{ref}-fixed.vcf.gz.tbi"
     output:
-        fasta="genomes/{var}/{ref}.fa",
-        vci="genomes/{var}/{ref}.vci.gz"
+        fasta="simx/genomes/{var}/{ref}.fa",
+        vci="simx/genomes/{var}/{ref}.vci.gz"
     params:
-        outprefix="genomes/{var}/{ref}",
-        outvci="genomes/{var}/{ref}.vci"
+        outprefix="simx/genomes/{var}/{ref}",
+        outvci="simx/genomes/{var}/{ref}.vci"
     singularity:
         "docker://churchilllab/g2gtools:3.0.0"
     shell:
@@ -169,17 +169,17 @@ rule ref_transform:
 
 rule gt_liftover:
     input:
-        gt="datasets/{dataset_id}/endo_ground_truth.bed",
-        damage="datasets/{dataset_id}/endo_damage.bed",
-        vci=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.vci.gz",
-        fasta=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.fa"
+        gt="simx/datasets/{dataset_id}/endo_ground_truth.bed",
+        damage="simx/datasets/{dataset_id}/endo_damage.bed",
+        vci=lambda wc: f"simx/genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.vci.gz",
+        fasta=lambda wc: f"simx/genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.fa"
     output:
-        gt="datasets/{dataset_id}/ref_ground_truth.bed",
-        damage="datasets/{dataset_id}/ref_damage.bed",
-        fasta="datasets/{dataset_id}/ref_unsanitized.fa"
+        gt="simx/datasets/{dataset_id}/ref_ground_truth.bed",
+        damage="simx/datasets/{dataset_id}/ref_damage.bed",
+        fasta="simx/datasets/{dataset_id}/ref_unsanitized.fa"
     params:
-        unmapped="datasets/{dataset_id}/ref_ground_truth.bed.unmapped",
-        damage_unmapped="datasets/{dataset_id}/ref_damage.bed.unmapped"
+        unmapped="simx/datasets/{dataset_id}/ref_ground_truth.bed.unmapped",
+        damage_unmapped="simx/datasets/{dataset_id}/ref_damage.bed.unmapped"
     singularity:
         "docker://churchilllab/g2gtools:3.0.0"
     shell:
@@ -200,9 +200,9 @@ rule gt_liftover:
 
 rule sanitize_ref:
     input:
-        fasta="datasets/{dataset_id}/ref_unsanitized.fa"
+        fasta="simx/datasets/{dataset_id}/ref_unsanitized.fa"
     output:
-        fasta="datasets/{dataset_id}/ref.fa"
+        fasta="simx/datasets/{dataset_id}/ref.fa"
     shell:
         """
         {SCRIPTS}/remove_nonacgt.py -i {input.fasta} -o {output.fasta}

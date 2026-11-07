@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import subprocess
 import sys
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_snakemake(snakefile, config, cores=None, slurm=False, secondary_accuracy=False, dry_run=False):
     cmd = ["snakemake", "-s", snakefile, "--use-singularity", "--configfile", config]
 
     if slurm:
-        cmd.extend(["--profile", "slurm"])
+        cmd.extend(["--profile", "simx/profiles/slurm"])
     else:
         cmd.extend(["--cores", str(cores)])
 
@@ -36,7 +39,9 @@ def main():
     parser.add_argument("-n", "--dry-run", action="store_true", help="Only show which jobs would run (snakemake --dry-run)")
     args = parser.parse_args()
 
-    config = "configs/config_test.yaml" if args.test else "configs/config.yaml"
+    # Workflow paths are relative to the repo root.
+    os.chdir(REPO_ROOT)
+    config = "simx/config/config_test.yaml" if args.test else "simx/config/config.yaml"
     run_simulate = not args.benchmark_only
     run_benchmark = not args.simulate_only
 

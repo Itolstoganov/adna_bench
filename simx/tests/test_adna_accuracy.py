@@ -6,9 +6,9 @@ alignment tied on the AS score with the primary overlaps the truth.
 
 Run directly with the project Python (has pysam + adna_accuracy's deps):
 
-    /home/itolstoganov/miniforge3/envs/strobealign-eval/bin/python tests/test_adna_accuracy.py
+    /home/itolstoganov/miniforge3/envs/strobealign-eval/bin/python simx/tests/test_adna_accuracy.py
 
-or, if pytest is available:  pytest tests/test_adna_accuracy.py
+or, if pytest is available:  pytest simx/tests/test_adna_accuracy.py
 """
 import os
 import sys
@@ -16,7 +16,7 @@ import tempfile
 
 import pysam
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "simx", "scripts")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts")))
 import adna_accuracy as A
 
 CHROM = "chr1"

@@ -13,7 +13,7 @@ benchmark taxonomic profilers against them. Two stages:
 - **git** with submodule support.
 - Build toolchain for gargammel: `make`, C/C++ compiler, `cmake`, `zlib`, `gsl`,
   `seq-gen`, `perl` — all provided by the `adna-eval` conda env
-  (`simx/envs/adna-eval.yml`). 
+  (`shared/envs/adna-eval.yml`). 
 
 ## Install
 
