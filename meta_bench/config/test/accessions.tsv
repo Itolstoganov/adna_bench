@@ -1,0 +1,12 @@
+# Test reference genomes: 5 small bacterial genomes + human chrM (~16 MB total).
+# Columns: species  class  taxid  accession (as in ../accessions.tsv). Taxids must
+# be species rank in the 2022 taxonomy and microbes must be on aMeta's pathogen
+# list (aMeta/resources/pathogensfound.very_inclusive.tab), or aMeta drops them
+# after KrakenUniq. A non-assembly accession is fetched as one nucleotide record.
+species	class	taxid	accession
+Yersinia_pestis_CO92	ancient	632	GCF_000009065.1
+Parvimonas_micra	ancient	33033	GCF_900637905.1
+Campylobacter_rectus	ancient	203	GCF_004803795.1
+Lactococcus_lactis	modern	1358	GCF_003176835.1
+Brevibacterium_aurantiacum	modern	273384	GCF_003932995.1
+Homo_sapiens_chrM	host	9606	NC_012920.1

@@ -8,8 +8,9 @@ simx/downloads
 simx/config/config.yaml
 simx/config/dardel_config.yml
 meta_bench/genomes
-meta_bench/results
+meta_bench/datasets
 meta_bench/runs
 .*
 workflow/.snakemake/*
 *__pycache__*
+vc_bench/data

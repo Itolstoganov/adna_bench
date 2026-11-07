@@ -11,10 +11,10 @@
 
 import re
 
-configfile: "meta_bench/config/config.yaml"
+configfile: "meta_bench/config/benchmark.yaml"
 
 GENOMES = config["genomes_dir"]
-RESULTS = config["results_dir"]
+DATASETS = config["datasets_dir"]
 NUM_READS = config["num_reads"]
 RL = config["read_length"]
 SHARED_SCRIPTS = "shared/scripts"
@@ -57,7 +57,7 @@ GARGAMMEL_REGISTRY = {}
 for _i, _sample in enumerate(SAMPLES, start=1):
     _comp = ",".join(map(str, config["proportions"][_i - 1]))
     for _phase in ("ancient", "modern"):
-        _simdir = f"{RESULTS}/{_sample}/{_phase}"
+        _simdir = f"{DATASETS}/{_sample}/{_phase}"
         if _phase == "ancient":
             _gargs = f"-rl {RL} {config['ancient_frag_args']} -damage {config['damage']}"
         else:
@@ -80,19 +80,19 @@ include: "../../shared/rules/gargammel.smk"
 
 rule all:
     input:
-        expand(RESULTS + "/{sample}/reads.fastq.gz", sample=SAMPLES),
-        expand(RESULTS + "/{sample}/truth.tsv", sample=SAMPLES),
+        expand(DATASETS + "/{sample}/reads.fastq.gz", sample=SAMPLES),
+        expand(DATASETS + "/{sample}/truth.tsv", sample=SAMPLES),
 
 
 rule parse_pass_truth:
     """Per-read truth (taxon + coords + damage) for one gargammel pass."""
     input:
-        r1=RESULTS + "/{sample}/{phase}/simulated_s1.fq.gz",
+        r1=DATASETS + "/{sample}/{phase}/simulated_s1.fq.gz",
         c2t=GENOMES + "/contig2taxon.tsv",
     output:
-        gt=RESULTS + "/{sample}/{phase}/ground_truth.bed",
-        damage=RESULTS + "/{sample}/{phase}/damage.bed",
-        truth=RESULTS + "/{sample}/{phase}/truth.tsv",
+        gt=DATASETS + "/{sample}/{phase}/ground_truth.bed",
+        damage=DATASETS + "/{sample}/{phase}/damage.bed",
+        truth=DATASETS + "/{sample}/{phase}/truth.tsv",
     wildcard_constraints:
         phase="(ancient|modern)",
         sample=r"sample\d+",
@@ -108,10 +108,10 @@ rule parse_pass_truth:
 rule concat_sample:
     """Concatenate the two passes' single-end reads into the sample FASTQ."""
     input:
-        ancient=RESULTS + "/{sample}/ancient/simulated_s1.fq.gz",
-        modern=RESULTS + "/{sample}/modern/simulated_s1.fq.gz",
+        ancient=DATASETS + "/{sample}/ancient/simulated_s1.fq.gz",
+        modern=DATASETS + "/{sample}/modern/simulated_s1.fq.gz",
     output:
-        reads=RESULTS + "/{sample}/reads.fastq.gz",
+        reads=DATASETS + "/{sample}/reads.fastq.gz",
     wildcard_constraints:
         sample=r"sample\d+",
     shell:
@@ -121,10 +121,10 @@ rule concat_sample:
 rule concat_truth:
     """Merge the two passes' per-read truth tables (single header)."""
     input:
-        ancient=RESULTS + "/{sample}/ancient/truth.tsv",
-        modern=RESULTS + "/{sample}/modern/truth.tsv",
+        ancient=DATASETS + "/{sample}/ancient/truth.tsv",
+        modern=DATASETS + "/{sample}/modern/truth.tsv",
     output:
-        truth=RESULTS + "/{sample}/truth.tsv",
+        truth=DATASETS + "/{sample}/truth.tsv",
     wildcard_constraints:
         sample=r"sample\d+",
     shell:

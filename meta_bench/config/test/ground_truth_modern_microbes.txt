@@ -1,0 +1,2 @@
+Lactococcus_lactis.fa	0.6	0.3
+Brevibacterium_aurantiacum.fa	0.4	0.7

@@ -63,7 +63,7 @@ deficit columns, and the heatmap gives a never-surfaced cell its own style. That
 also keeps auth_calls.tsv, and with it the breadth-of-coverage cache, identical
 between the two modes.
 
-Ground truth is the simulated *reads* (`results/sim/<sample>/truth.tsv`), not the
+Ground truth is the simulated *reads* (`meta_bench/datasets/sim/<sample>/truth.tsv`), not the
 composition tables in meta_bench/config/, because gargammel pairs the `bact/list`
 weights with the genome files in readdir order (gargammel.pl:942 vs :1340) and so
 simulates a permutation of what those tables ask for; truth.tsv is derived from

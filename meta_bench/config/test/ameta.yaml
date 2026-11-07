@@ -1,0 +1,62 @@
+# Test aMeta config: identical to ../ameta.yaml except for the databases, the
+# samplesheet and the memory settings. Used by `run_full_benchmark.sh --test`,
+# whose step 1 builds the databases below (data/test/, ~350 MB) from the test
+# genomes instead of downloading the full ones.
+# Relative paths are resolved against the test run dir (meta_bench/runs/test).
+samplesheet: "../../config/test/samples.tsv"
+samples:
+  exclude: []
+
+analyses:
+  bowtie2: false
+  mapdamage: false
+  authentication: true
+  malt: true
+  krona: false
+
+profilers:
+  - malt
+  - strobealign
+  - bowtie2
+  - bwa_aln
+  - bwa_mem
+
+aligners:
+  strobealign:
+    repo: "https://github.com/ksahlin/strobealign"
+    ref: "4be2dcc208fa54a8c8caed2146adf116f52c382c"
+    args: "--adna -k 17 -s 13 --ry-len 8 -M 1000 --ssw -L 30 --secondary-seq --st 0.9 -N -1"
+    read_length: 45
+  bowtie2:
+    args: "--very-sensitive -k 1000"
+    max_score_drop: 6
+  bwa_aln:
+    args: "-n 0.01 -o 2 -l 1024"
+    max_hits: 1000
+  bwa_mem:
+    args: "-a -k 17 -r 2.5"
+    max_score_drop: 5
+
+alignment_filter:
+  min_aligned_bp: 20
+  min_aligned_frac: 0.8
+
+ngslca_args: "-simscorelow 0.9 -simscorehigh 1.0 -editdistmax 1000"
+
+krakenuniq_db: ../../../data/test/krakenuniq
+pathogenomesFound: ../../aMeta/resources/pathogensfound.very_inclusive.tab
+bowtie2_seqid2taxid_db: resources/UNUSED_bowtie2_seqid2taxid.map
+bowtie2_db: resources/UNUSED_bowtie2_index/library.pathogen.fna
+malt_seqid2taxid_db: ../../../data/test/malt/seqid2taxid.map
+malt_nt_fasta: ../../../data/test/malt/library.fna
+malt_accession2taxid: ../../../data/test/malt/nucl_gb.accession2taxid
+
+malt_parse_taxon_names: false
+ncbi_db: resources/ncbi
+
+malt_max_heap: "8G"
+
+n_unique_kmers: 1000
+n_tax_reads: 200
+
+krakenuniq_preload_size: "1G"

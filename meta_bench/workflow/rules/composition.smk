@@ -38,7 +38,7 @@ rule build_contig2taxon:
 
 rule build_list:
     output:
-        lst=RESULTS + "/{sample}/{phase}/bact.list",
+        lst=DATASETS + "/{sample}/{phase}/bact.list",
     params:
         script=f"{MB_SCRIPTS}/build_lists.py",
         table=lambda wc: PASS_TABLE[wc.phase],

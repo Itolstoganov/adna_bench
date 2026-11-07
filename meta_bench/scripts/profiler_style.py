@@ -3,7 +3,7 @@
 The aligners take theirs from shared/scripts/tool_style.py, the same table the
 simx benchmark uses. This benchmark profiles a single strobealign version, which
 takes strobealign's first color and the name set as `strobealign_name` in
-meta_bench/config/config.yaml. Only plots use these: TSVs, directories and rule
+meta_bench/config/benchmark.yaml. Only plots use these: TSVs, directories and rule
 names keep the raw profiler names (bwa_aln, strobealign, ...).
 """
 
@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "shared", "scripts"))
 import tool_style  # noqa: E402
 
-CONFIG = os.path.join(HERE, "..", "config", "config.yaml")
+CONFIG = os.path.join(HERE, "..", "config", "benchmark.yaml")
 
 
 def _strobealign_name():

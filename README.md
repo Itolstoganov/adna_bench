@@ -1,9 +1,9 @@
 # adna_bench
 
-Benchmarks for ancient-DNA tools on gargammel-simulated reads with per-read ground truth.
+Benchmarks for ancient-DNA tools on [gargammel](https://github.com/grenaud/gargammel)-simulated reads with per-read ground truth.
 
-- `simx/` — read mapping accuracy benchmark (strobealign, bwa aln/mem, bowtie2, SAFARI).
-- `meta_bench/` — metagenomic taxonomic profiler benchmark (aMeta).
+- `simx/` — read mapping accuracy benchmark ([strobealign](https://github.com/ksahlin/strobealign), [bwa](https://github.com/lh3/bwa) aln/mem, [bowtie2](https://github.com/BenLangmead/bowtie2)).
+- `meta_bench/` — metagenomic taxonomic profiler benchmark ([aMeta](https://github.com/NBISweden/aMeta)).
 
 All commands are run from the repository root.
 
@@ -40,23 +40,20 @@ Results are written to `simx/result/`: per-dataset `accuracy_table.tsv`, `resour
 
 ## Metagenomic profiling benchmark (meta_bench)
 
-1. Simulate the samples (composition and parameters in `meta_bench/config/config.yaml`; genomes are downloaded per `meta_bench/config/accessions.tsv`):
+`meta_bench/run.sh` runs the benchmark in four steps
 
-   ```bash
-   snakemake -s meta_bench/workflow/Simulation.snake --cores 8
-   # SLURM: add --profile meta_bench/benchmark/profiles/slurm -j 100
-   ```
+1. **databases**: download the [KrakenUniq](https://github.com/fbreitwieser/krakenuniq) and [MALT](https://github.com/husonlab/malt) databases (~750 GB) to `data/` at the repo root. Symlink `data/` to a large disk first if needed.
+2. **simulate**: simulate the samples with gargammel using the workflow in `meta_bench/workflow/Simulation.snake`. Composition and parameters are set up in `meta_bench/config/benchmark.yaml`. Reference genomes are in `meta_bench/config/accessions.tsv`. Reads and per-read ground truth will be created in `meta_bench/datasets/sim/{sample}/`.
+3. **ameta**: run aMeta ([submodule version](https://github.com/Itolstoganov/aMeta/tree/bowtie2-profiler)) in `meta_bench/runs/sim_dataset/` using configs from `meta_bench/config/ameta.yaml`.
+4. **summary**: score the authentication results against the ground truth, and summarise runtime and memory. Results are written to `meta_bench/runs/sim_dataset/results/`. `meta_summary/` holds the ground-truth heatmap and metrics, `meta_summary/bench/` the runtime/memory summary.
 
-   Per-sample reads and per-read ground truth are written to `meta_bench/results/sim/{sample}/` (`reads.fastq.gz`, `truth.tsv`).
+```bash
+meta_bench/run_full_benchmark.sh               # all four steps
+meta_bench/run_full_benchmark.sh 3 4           # only aMeta + summary
+meta_bench/run_full_benchmark.sh ameta -- -n   # args after -- go to snakemake
+CORES=40 RAM_GB=156 meta_bench/run_full_benchmark.sh
+```
 
-2. Set the KrakenUniq, MALT and NCBI taxonomy database paths in `meta_bench/benchmark/aMeta_config.yaml`, then run aMeta to obtain authentication scores:
+**Resources:** The metagenomic benchmark requires ~1.1 TB disk (for krakenuniq and MALT databases), as well as ~160 GB RAM. With 20 cores, MALT takes ~15 min per sample (most of it loading the index); the aligner + [ngsLCA](https://github.com/miwipe/ngsLCA) profilers take a few minutes per sample.
 
-   ```bash
-   conda env create -n aMeta -f meta_bench/aMeta/workflow/envs/environment.yaml
-   conda activate aMeta
-   CORES=40 meta_bench/benchmark/run.sh     # SLURM: PROFILE=meta_bench/benchmark/profiles/slurm
-   conda activate adna-eval
-   meta_bench/benchmark/score.sh
-   ```
-
-   The profiler is selected by `profiler:` in `meta_bench/benchmark/config.yaml`. Scores are written to `meta_bench/results/benchmark/<profiler>/scores/`.
+`meta_bench/run.sh --test` runs all four steps on 2 small samples, with databases built from the 6 test genomes (`meta_bench/config/test/`), to check the setup before the full run. It needs ~13 GB disk and ~8 GB RAM.

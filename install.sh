@@ -42,7 +42,7 @@ Done. Next:
   # Aligner benchmark (simx): simulate + benchmark
   simx/run.py --cores 8            # --test for a small run, --slurm for SLURM
 
-  # Metagenomic benchmark: simulate the metagenomic datasets (writes meta_bench/results/sim/):
+  # Metagenomic benchmark: simulate the metagenomic datasets (writes meta_bench/datasets/sim/):
   snakemake -s meta_bench/workflow/Simulation.snake --cores 8
 
   # Benchmark (needs aMeta + its databases): see README.md

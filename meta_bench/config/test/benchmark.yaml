@@ -1,0 +1,18 @@
+# Test simulation config, merged over ../benchmark.yaml (run_full_benchmark.sh
+# --test passes it as --configfile). 2 small samples from the genomes in
+# accessions.tsv; Yersinia pestis is present in sample1 only.
+n_samples: 2
+num_reads: 20000
+
+proportions:
+  - [0.7, 0.20, 0.10]
+  - [0.5, 0.15, 0.35]
+
+accessions: meta_bench/config/test/accessions.tsv
+ancient_table: meta_bench/config/test/ground_truth_ancient_microbes.txt
+modern_table: meta_bench/config/test/ground_truth_modern_microbes.txt
+human_genome: Homo_sapiens_chrM
+
+# Separate dirs, so the test never touches the full genomes/contig2taxon.tsv
+genomes_dir: meta_bench/genomes/test
+datasets_dir: meta_bench/datasets/test

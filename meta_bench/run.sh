@@ -4,7 +4,7 @@
 #   1. databases   download the KrakenUniq and MALT databases
 #   2. simulate    simulate 10 ancient metagenomic samples with gargammel
 #   3. ameta       run aMeta (benchmark fork: KrakenUniq -> MALT + strobealign/ngsLCA
-#                  -> authentication) with config/config_ngslca.yaml
+#                  -> authentication) with config/ameta.yaml
 #   4. summary     score the authentication results against the simulation ground truth,
 #                  and summarise runtime and memory from the Snakemake benchmarks
 #
@@ -13,15 +13,23 @@
 #   meta_bench/run_full_benchmark.sh 3 4           # only aMeta + summary
 #   meta_bench/run_full_benchmark.sh simulate      # by name: databases|simulate|ameta|summary
 #   meta_bench/run_full_benchmark.sh 2 3 -- -n     # args after -- go to snakemake (dry run)
+#   meta_bench/run_full_benchmark.sh --test        # small end-to-end test, see below
+#
+# --test runs the same four steps on 2 small samples simulated from 5 bacterial
+# genomes + human chrM (config/test/), with KrakenUniq/MALT databases that step 1
+# builds from those genomes (~350 MB in data/test/)
+# instead of downloading the full ones. Outputs go to datasets/test/, genomes/test/
+# and runs/test/, so the test never touches the full benchmark.
 #
 # Env overrides:
 #   CORES=40         cores for both snakemake runs (default 20)
-#   RAM_GB=156       advisory memory budget for the aMeta scheduler (default 156)
-#   N_SAMPLES=10     number of simulated samples (default 10)
+#   RAM_GB=156       advisory memory budget for the aMeta scheduler (default 156, test 32)
+#   N_SAMPLES=10     number of simulated samples (default 10, test 2)
 #   CONDA=mamba      solver used to create missing envs (default conda)
-# Step 1 needs ~800 GB free for KrakenUniq
-# and ~390 GB for the MALT nt reference; the download targets are read out of the
-# aMeta config, so they always match the paths aMeta will look in.
+# Step 1 needs ~400 GB free for KrakenUniq and ~450 GB for the MALT nt reference
+# while it downloads (350 GB once unpacked); step 3 another ~300 GB. The download
+# targets are read out of the aMeta config, so they always match the paths aMeta
+# will look in.
 #
 # This deliberately does not use run_ameta.sh (which adds a systemd cgroup hard RAM
 # cap and picks a samplesheet); step 3 is the plain snakemake command.
@@ -32,14 +40,32 @@ REPO_ROOT="$(cd "$MB_DIR/.." && pwd)"
 # Both snakemake workflows resolve their paths relative to the repo root.
 cd "$REPO_ROOT"
 
-RUNDIR="$MB_DIR/runs/sim_dataset"
+TEST=0
+for a in "$@"; do
+  [[ "$a" == "--" ]] && break
+  [[ "$a" == "--test" ]] && TEST=1
+done
+
 AMETA_DIR="$MB_DIR/aMeta"
-AMETA_CONFIG="$RUNDIR/config/config_ngslca.yaml"
-SIM_RESULTS="$MB_DIR/results/sim"
+if (( TEST )); then
+  RUNDIR="$MB_DIR/runs/test"
+  AMETA_CONFIG="$MB_DIR/config/test/ameta.yaml"
+  SIM_CONFIG="$MB_DIR/config/test/benchmark.yaml"
+  SIM_RESULTS="$MB_DIR/datasets/test"
+  GENOMES="$MB_DIR/genomes/test"
+  N_SAMPLES="${N_SAMPLES:-2}"
+  RAM_GB="${RAM_GB:-32}"
+else
+  RUNDIR="$MB_DIR/runs/sim_dataset"
+  AMETA_CONFIG="$MB_DIR/config/ameta.yaml"
+  SIM_CONFIG="$MB_DIR/config/benchmark.yaml"
+  SIM_RESULTS="$MB_DIR/datasets/sim"
+  GENOMES="$MB_DIR/genomes"
+  N_SAMPLES="${N_SAMPLES:-10}"
+  RAM_GB="${RAM_GB:-156}"
+fi
 
 CORES="${CORES:-20}"
-RAM_GB="${RAM_GB:-156}"
-N_SAMPLES="${N_SAMPLES:-10}"
 CONDA="${CONDA:-conda}"
 SIM_ENV="${SIM_ENV:-adna-eval}"
 SIM_ENV_YML="$REPO_ROOT/shared/envs/adna-eval.yml"
@@ -61,7 +87,12 @@ banner() { printf '\n=== step %s: %s ===\n' "$1" "$2" >&2; }
 # Run a command inside a conda env (the two snakemake versions must not mix).
 in_env() {
   local env="$1"; shift
-  ( eval "$(conda shell.bash hook)"; conda activate "$env"; exec "$@" )
+  ( eval "$(conda shell.bash hook)"; conda activate "$env"
+    # Put the env's bin first. /etc/profile.d/anaconda.sh can prepend another
+    # conda's bin, and a rule's conda env takes over the active env's PATH slot,
+    # so `python` in a rule would resolve to one without pysam.
+    PATH="$CONDA_PREFIX/bin:${PATH//$CONDA_PREFIX\/bin:/}"
+    exec "$@" )
 }
 
 env_exists() { conda env list | awk '{print $1}' | grep -qx "$1"; }
@@ -103,7 +134,16 @@ cfg_get() {
   v="$(sed -nE "s/^$1:[[:space:]]*//p" "$AMETA_CONFIG" | head -1)"
   v="${v%\"}"; v="${v#\"}"
   [[ -n "$v" ]] || { echo "error: key '$1' not found in $AMETA_CONFIG" >&2; exit 1; }
+  # aMeta runs with cwd=$RUNDIR, so resolve relative paths the same way.
+  [[ "$v" == /* ]] || v="$RUNDIR/$v"
   printf '%s\n' "$v"
+}
+
+# Items of a top-level YAML list key (`key:` followed by `  - item` lines).
+cfg_list() {
+  awk -v key="$1:" '$1 == key { on = 1; next }
+                    on && /^[[:space:]]*-/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); gsub(/"/, ""); print; next }
+                    on && /^[^[:space:]#]/ { exit }' "$AMETA_CONFIG"
 }
 
 fetch() {
@@ -130,13 +170,30 @@ check_space() {
 # 1. download the KrakenUniq and MALT databases
 ##############################################################################
 step_databases() {
-  banner 1 "download the KrakenUniq and MALT databases"
-
   local ku_db malt_fna seqid2taxid acc2taxid
   ku_db="$(cfg_get krakenuniq_db)"
   malt_fna="$(cfg_get malt_nt_fasta)"
   seqid2taxid="$(cfg_get malt_seqid2taxid_db)"
   acc2taxid="$(cfg_get malt_accession2taxid)"
+
+  if (( TEST )); then
+    banner 1 "build the test KrakenUniq and MALT databases from the test genomes"
+    # Download only the test genomes (the simulation's download_genome rule).
+    # Targets are repo-relative, as the workflow's rules (cwd is the repo root).
+    local accessions genomes_rel genome_targets
+    accessions="$(sed -nE 's/^accessions:[[:space:]]*//p' "$SIM_CONFIG")"
+    genomes_rel="$(sed -nE 's/^genomes_dir:[[:space:]]*//p' "$SIM_CONFIG")"
+    mapfile -t genome_targets < <(awk -F'\t' -v d="$genomes_rel" \
+      '!/^#/ && $1 != "species" && NF { print d "/" $1 ".fa" }' "$accessions")
+    in_env "$SIM_ENV" snakemake -s "$MB_DIR/workflow/Simulation.snake" \
+      --configfile "$SIM_CONFIG" --cores "$CORES" --rerun-incomplete \
+      "${sm_args[@]}" -- "${genome_targets[@]}"
+    in_env "$AMETA_ENV" "$MB_DIR/scripts/build_test_dbs.sh" "$GENOMES" "$accessions" \
+      "$ku_db" "$malt_fna" "$seqid2taxid" "$acc2taxid" "$CORES"
+    return
+  fi
+
+  banner 1 "download the KrakenUniq and MALT databases"
 
   if [[ -s "$ku_db/taxDB" && -s "$ku_db/database.idx" ]]; then
     echo ">> KrakenUniq index present, skipping" >&2
@@ -174,9 +231,11 @@ step_simulate() {
   ensure_gargammel
 
   in_env "$SIM_ENV" snakemake -s "$MB_DIR/workflow/Simulation.snake" \
+    --configfile "$SIM_CONFIG" \
     --cores "$CORES" --config "n_samples=$N_SAMPLES" --rerun-incomplete "${sm_args[@]}"
 
-  # aMeta reads the reads through the run dir's fastq/ symlinks (config/*.tsv).
+  # aMeta reads the reads through the run dir's fastq/ symlinks (the samplesheet,
+  # config/samples_sim.tsv or config/test/samples.tsv, lists them).
   mkdir -p "$RUNDIR/fastq"
   for i in $(seq 1 "$N_SAMPLES"); do
     ln -sfn "$SIM_RESULTS/sample$i/reads.fastq.gz" "$RUNDIR/fastq/sample$i.fastq.gz"
@@ -201,10 +260,30 @@ step_ameta() {
 
   # Run from the run dir: aMeta's common.smk also loads a hardcoded
   # `configfile: "config/config.yaml"` relative to cwd and deep-merges it under
-  # --configfile, so the run dir must be the one holding both configs.
+  # --configfile. Make it a copy of $AMETA_CONFIG so no stale keys leak in
+  # (cp -b keeps a differing old file as config.yaml~).
+  mkdir -p "$RUNDIR/config"
+  cmp -s "$AMETA_CONFIG" "$RUNDIR/config/config.yaml" \
+    || cp -b "$AMETA_CONFIG" "$RUNDIR/config/config.yaml"
+
+  # Explicit targets, not `rule all`: the workflow has no bowtie2 toggle, and
+  # MultiQC always wants logs/BOWTIE2/* (bowtie2_db is a placeholder here).
+  # One abundance matrix + authentication heatmap per configured profiler.
+  local targets=() p
+  for p in $(cfg_list profilers); do
+    if [[ "$p" == malt ]]; then
+      targets+=(results/MALT_ABUNDANCE_MATRIX_SAM/malt_abundance_matrix_sam.txt
+                results/MALT_ABUNDANCE_MATRIX_RMA6/malt_abundance_matrix_rma6.txt)
+    else
+      targets+=("results/NGSLCA_ABUNDANCE_MATRIX/$p/ngslca_abundance_matrix.txt")
+    fi
+    targets+=("results/overview_heatmap_scores.$p.pdf")
+  done
+  (( ${#targets[@]} )) || { echo "error: no profilers in $AMETA_CONFIG" >&2; exit 1; }
+
   ( cd "$RUNDIR" && in_env "$AMETA_ENV" snakemake \
       --snakefile "$AMETA_DIR/workflow/Snakefile" \
-      --configfile config/config_ngslca.yaml \
+      --configfile "$AMETA_CONFIG" \
       --use-conda --conda-frontend conda \
       --cores "$CORES" \
       --resources "mem_mb=$total_mb" \
@@ -214,7 +293,10 @@ step_ameta() {
         "Build_Malt_DB:mem_mb=$malt_build_mb" \
         "Malt:mem_mb=$malt_mb" \
         "Malt_Extract:mem_mb=$malt_extract_mb" \
-      --rerun-incomplete --printshellcmds "${sm_args[@]}" )
+      --rerun-incomplete --printshellcmds "${sm_args[@]}" \
+      -- "${targets[@]}" )
+  # `--` keeps nargs="+" options in sm_args (--until, --set-threads, ...) from
+  # swallowing the targets.
 }
 
 ##############################################################################
@@ -226,6 +308,7 @@ step_summary() {
   in_env "$SIM_ENV" python "$MB_DIR/scripts/auth_summary.py" \
     --results "$RUNDIR/results" \
     --truth "$SIM_RESULTS" \
+    --genomes "$GENOMES" \
     --outdir "$RUNDIR/results/meta_summary"
 
   in_env "$SIM_ENV" python "$MB_DIR/scripts/bench_summary.py" \
@@ -244,25 +327,33 @@ while [[ $# -gt 0 ]]; do
   args+=("$1"); shift
 done
 
-if [[ ${#args[@]} -eq 0 ]]; then
+for a in "${args[@]}"; do
+  [[ "$a" == --test ]] || { steps=(x); break; }
+done
+if [[ ${#steps[@]} -eq 0 ]]; then
   steps=(1 2 3 4)
 else
+  steps=()
   for a in "${args[@]}"; do
     case "$a" in
       1|databases) steps+=(1) ;;
       2|simulate)  steps+=(2) ;;
       3|ameta)     steps+=(3) ;;
       4|summary)   steps+=(4) ;;
+      --test)      ;;   # handled at the top
       -h|--help)   awk 'NR>1{ if (/^#/) print; else exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
-      *) echo "usage: $0 [1|databases] [2|simulate] [3|ameta] [4|summary]" >&2; exit 1 ;;
+      *) echo "usage: $0 [--test] [1|databases] [2|simulate] [3|ameta] [4|summary]" >&2; exit 1 ;;
     esac
   done
 fi
 
 # Conda envs: create whichever the selected steps need and do not exist yet.
 steps_sorted="$(printf '%s\n' "${steps[@]}" | sort -u)"
-grep -qE '^(2|4)$' <<<"$steps_sorted" && ensure_env "$SIM_ENV" "$SIM_ENV_YML"
-grep -qE '^3$'     <<<"$steps_sorted" && ensure_env "$AMETA_ENV" "$AMETA_ENV_YML"
+# (test step 1 needs both: it downloads genomes and runs krakenuniq-build)
+sim_steps='^(2|4)$' ameta_steps='^3$'
+(( TEST )) && sim_steps='^(1|2|4)$' ameta_steps='^(1|3)$'
+grep -qE "$sim_steps"   <<<"$steps_sorted" && ensure_env "$SIM_ENV" "$SIM_ENV_YML"
+grep -qE "$ameta_steps" <<<"$steps_sorted" && ensure_env "$AMETA_ENV" "$AMETA_ENV_YML"
 
 for s in $steps_sorted; do
   case "$s" in

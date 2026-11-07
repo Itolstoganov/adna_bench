@@ -38,7 +38,7 @@ human_genome: Homo_sapiens        # species name (accessions.tsv) used for endo 
 # Paths / tooling
 gargammel_pl: gargammel/gargammel.pl
 genomes_dir: meta_bench/genomes
-results_dir: meta_bench/results/sim
+datasets_dir: meta_bench/datasets/sim
 
 # Plot label of the strobealign profiler (one version for now; its color is
 # strobealign's first in shared/scripts/tool_style.py)

@@ -1,0 +1,67 @@
+# aMeta config for the meta_bench simulated samples (aMeta submodule, meta_bench/aMeta):
+# KrakenUniq -> {malt, strobealign/bowtie2/bwa_aln/bwa_mem + ngsLCA} -> authentication.
+# Used by step 3 of run_full_benchmark.sh, which builds its targets from `profilers:`.
+#
+# Relative paths are resolved against the aMeta run dir (meta_bench/runs/sim_dataset,
+# snakemake's cwd). The databases live under <repo>/data/, where step 1 of
+# run_full_benchmark.sh downloads them (it reads the targets from this file);
+# symlink <repo>/data to wherever you keep them.
+# fastq paths inside are relative to the run dir: step 2 of run_full_benchmark.sh
+# symlinks the simulated reads to fastq/sampleN.fastq.gz there.
+samplesheet: "../../config/samples_sim.tsv"
+samples:
+  exclude: []
+
+analyses:
+  bowtie2: false
+  mapdamage: false
+  authentication: true
+  malt: true
+  krona: false
+
+profilers:
+  - malt
+  - strobealign
+  - bowtie2
+  - bwa_aln
+  - bwa_mem
+
+aligners:
+  strobealign:
+    repo: "https://github.com/ksahlin/strobealign"
+    ref: "4be2dcc208fa54a8c8caed2146adf116f52c382c"
+    args: "--adna -k 17 -s 13 --ry-len 8 -M 1000 --ssw -L 30 --secondary-seq --st 0.9 -N -1"
+    read_length: 45
+  bowtie2:
+    args: "--very-sensitive -k 1000"
+    max_score_drop: 6
+  bwa_aln:
+    args: "-n 0.01 -o 2 -l 1024"
+    max_hits: 1000
+  bwa_mem:
+    args: "-a -k 17 -r 2.5"
+    max_score_drop: 5
+
+alignment_filter:
+  min_aligned_bp: 20
+  min_aligned_frac: 0.8
+
+ngslca_args: "-simscorelow 0.9 -simscorehigh 1.0 -editdistmax 1000"
+
+krakenuniq_db: ../../../data/krakenuniq_standard
+pathogenomesFound: ../../aMeta/resources/pathogensfound.very_inclusive.tab
+bowtie2_seqid2taxid_db: resources/UNUSED_bowtie2_seqid2taxid.map
+bowtie2_db: resources/UNUSED_bowtie2_index/library.pathogen.fna
+malt_seqid2taxid_db: ../../../data/malt/seqid2taxid.map.orig
+malt_nt_fasta: ../../../data/malt/library.fna
+malt_accession2taxid: ../../../data/malt/nucl_gb.accession2taxid
+
+malt_parse_taxon_names: false
+ncbi_db: resources/ncbi
+
+malt_max_heap: "128G"
+
+n_unique_kmers: 1000
+n_tax_reads: 200
+
+krakenuniq_preload_size: "80G"
