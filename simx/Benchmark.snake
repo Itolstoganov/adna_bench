@@ -3,6 +3,9 @@ from itertools import product
 
 configfile: "simx/config/config.yaml"
 
+# Per-run outputs (datasets, runs, csv, result); genomes and binaries are shared.
+OUT = config.get("output_dir", "simx")
+
 include: "rules/alignment.smk"
 include: "rules/pipeline.smk"
 
@@ -144,20 +147,20 @@ SUMMARY_PNGS = SUMMARY_PNG_METRICS + (COMBINED_K_PNG_METRICS if HAS_MULTI_K else
 
 rule final:
     input:
-        expand("simx/result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
-        expand("simx/result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
-        expand("simx/result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
-        expand("simx/result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else [],
-        "simx/result/summary_plots.pdf",
-        expand("simx/result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
+        expand(OUT + "/result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        expand(OUT + "/result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
+        expand(OUT + "/result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=PLOT_METRICS),
+        expand(OUT + "/result/{dataset_id}/plots/{metric}.png", dataset_id=DATASET_IDS, metric=K_PLOT_METRICS) if HAS_MULTI_K else [],
+        OUT + "/result/summary_plots.pdf",
+        expand(OUT + "/result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
 
 
 rule run_adna_accuracy:
     output:
-        "simx/csv/{prog}/{dataset_id}/accuracy.tsv"
+        OUT + "/csv/{prog}/{dataset_id}/accuracy.tsv"
     input:
-        gt="simx/datasets/{dataset_id}/ref_ground_truth.bed",
-        bam="simx/runs/{prog}/{dataset_id}/se.bam"
+        gt=OUT + "/datasets/{dataset_id}/ref_ground_truth.bed",
+        bam=OUT + "/runs/{prog}/{dataset_id}/se.bam"
     params:
         thresholds=SCORE_THRESHOLDS,
         recompute_as = lambda wildcards: False if wildcards.prog.startswith("strobealign") else True,
@@ -169,9 +172,9 @@ rule run_adna_accuracy:
 
 rule accuracy_tables:
     output:
-        "simx/result/{dataset_id}/accuracy_table.tsv"
+        OUT + "/result/{dataset_id}/accuracy_table.tsv"
     input:
-        expand("simx/csv/{prog}/{{dataset_id}}/accuracy.tsv", prog=PROGRAMS)
+        expand(OUT + "/csv/{prog}/{{dataset_id}}/accuracy.tsv", prog=PROGRAMS)
     params:
         programs=PROGRAMS,
         config=config
@@ -223,10 +226,10 @@ rule accuracy_tables:
 
 rule resource_tables:
     output:
-        "simx/result/{dataset_id}/resource_table.tsv"
+        OUT + "/result/{dataset_id}/resource_table.tsv"
     input:
-        res=expand("simx/csv/{prog}/{{dataset_id}}/se.bam.resources.csv", prog=PROGRAMS),
-        index=expand("simx/csv/{prog}/{{dataset_id}}/index.resources.csv", prog=PROGRAMS)
+        res=expand(OUT + "/csv/{prog}/{{dataset_id}}/se.bam.resources.csv", prog=PROGRAMS),
+        index=expand(OUT + "/csv/{prog}/{{dataset_id}}/index.resources.csv", prog=PROGRAMS)
     params:
         programs=PROGRAMS
     run:
@@ -268,28 +271,28 @@ rule resource_tables:
 
 rule plots:
     output:
-        expand("simx/result/{{dataset_id}}/plots/{metric}.png", metric=PLOT_METRICS)
+        expand(OUT + "/result/{{dataset_id}}/plots/{metric}.png", metric=PLOT_METRICS)
     input:
-        accuracy="simx/result/{dataset_id}/accuracy_table.tsv",
-        resources="simx/result/{dataset_id}/resource_table.tsv"
+        accuracy=OUT + "/result/{dataset_id}/accuracy_table.tsv",
+        resources=OUT + "/result/{dataset_id}/resource_table.tsv"
     params:
         k=config.get("main_k", 17),
         tool_args=TOOL_ARGS
     shell:
-        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir simx/result/{wildcards.dataset_id}/plots --k {params.k} {params.tool_args}"
+        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir {OUT}/result/{wildcards.dataset_id}/plots --k {params.k} {params.tool_args}"
 
 
 rule k_plots:
     output:
-        expand("simx/result/{{dataset_id}}/plots/{metric}.png", metric=K_PLOT_METRICS)
+        expand(OUT + "/result/{{dataset_id}}/plots/{metric}.png", metric=K_PLOT_METRICS)
     input:
-        accuracy="simx/result/{dataset_id}/accuracy_table.tsv",
-        resources="simx/result/{dataset_id}/resource_table.tsv"
+        accuracy=OUT + "/result/{dataset_id}/accuracy_table.tsv",
+        resources=OUT + "/result/{dataset_id}/resource_table.tsv"
     params:
         threshold=config.get("main_score_threshold", 60),
         tool_args=TOOL_ARGS
     shell:
-        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir simx/result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold} {params.tool_args}"
+        "python simx/scripts/plots.py --input {input.accuracy} --resources {input.resources} --output-dir {OUT}/result/{wildcards.dataset_id}/plots --k-plot --score-threshold {params.threshold} {params.tool_args}"
 
 
 def _summary_dataset_arg(dataset_id, acc, res, gt):
@@ -305,12 +308,12 @@ def _summary_dataset_arg(dataset_id, acc, res, gt):
 
 rule summary_plots:
     output:
-        pdf="simx/result/summary_plots.pdf",
-        pngs=expand("simx/result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
+        pdf=OUT + "/result/summary_plots.pdf",
+        pngs=expand(OUT + "/result/summary_plots/{metric}.png", metric=SUMMARY_PNGS)
     input:
-        accuracy=expand("simx/result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
-        resources=expand("simx/result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
-        ground_truth=expand("simx/datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS)
+        accuracy=expand(OUT + "/result/{dataset_id}/accuracy_table.tsv", dataset_id=DATASET_IDS),
+        resources=expand(OUT + "/result/{dataset_id}/resource_table.tsv", dataset_id=DATASET_IDS),
+        ground_truth=expand(OUT + "/datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS)
     params:
         threshold=config.get("main_score_threshold", 60),
         main_k=config.get("main_k", 17),
@@ -322,21 +325,21 @@ rule summary_plots:
             for d, acc, res, gt in zip(DATASET_IDS, input.accuracy, input.resources, input.ground_truth)
         )
     shell:
-        "python simx/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir simx/result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.combined_k} {params.dataset_args} {params.tool_args}"
+        "python simx/scripts/plots.py --summary-pdf {output.pdf} --summary-png-dir {OUT}/result/summary_plots --main-k {params.main_k} --score-threshold {params.threshold} --num-reads {params.num_reads} {params.combined_k} {params.dataset_args} {params.tool_args}"
 
 
 def index_log(wildcards):
     """Log holding the index construction measurements for a program, if any."""
     prog, dataset_id = wildcards.prog, wildcards.dataset_id
     if prog in ("bwaaln", "bwamem") or prog in BWAMEM_K_PROGRAMS:
-        return f"simx/datasets/{dataset_id}/ref.fa.bwa_index.log"
+        return f"{OUT}/datasets/{dataset_id}/ref.fa.bwa_index.log"
     if prog == "bowtie2":
-        return f"simx/datasets/{dataset_id}/ref.fa.bowtie2_index.log"
+        return f"{OUT}/datasets/{dataset_id}/ref.fa.bowtie2_index.log"
     if prog == "safari":
-        return f"simx/datasets/{dataset_id}/safari/ref.index.log"
+        return f"{OUT}/datasets/{dataset_id}/safari/ref.index.log"
     if prog.startswith("strobealign-"):
         # strobealign indexes on the fly; only its indexing time is reported separately
-        return f"simx/runs/{prog}/{dataset_id}/se.bam.log"
+        return f"{OUT}/runs/{prog}/{dataset_id}/se.bam.log"
     return []
 
 
@@ -349,7 +352,7 @@ def _parse_wall_clock(value):
 
 rule index_resources:
     output:
-        csv="simx/csv/{prog}/{dataset_id}/index.resources.csv"
+        csv=OUT + "/csv/{prog}/{dataset_id}/index.resources.csv"
     input:
         log=index_log
     run:
@@ -377,9 +380,9 @@ rule index_resources:
 
 rule resources:
     output:
-        csv="simx/csv/{prog}/{dataset_id}/{ends}.{bampaf}.resources.csv"
+        csv=OUT + "/csv/{prog}/{dataset_id}/{ends}.{bampaf}.resources.csv"
     input:
-        log="simx/runs/{prog}/{dataset_id}/{ends}.{bampaf}.log",
+        log=OUT + "/runs/{prog}/{dataset_id}/{ends}.{bampaf}.log",
     params:
         typ=lambda wildcards: "map" if wildcards.bampaf == "paf" else "align",
         genome=lambda wc: f"genomes/{get_dataset_param(wc, 'endogenous_genome')}",

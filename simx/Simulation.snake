@@ -2,6 +2,9 @@ from itertools import product
 
 configfile: "simx/config/config.yaml"
 
+# Per-run outputs (datasets, runs, csv, result); genomes and binaries are shared.
+OUT = config.get("output_dir", "simx")
+
 include: "rules/pipeline.smk"
 
 NUM_READS = config.get("num_reads", 100000)
@@ -22,10 +25,10 @@ VARIATION_SETTINGS = {
 
 
 # Register each dataset with the shared gargammel_simulate rule. Keyed by the
-# per-dataset output prefix "simdir" = simx/datasets/{dataset_id}.
+# per-dataset output prefix "simdir" = {OUT}/datasets/{dataset_id}.
 GARGAMMEL_REGISTRY = {}
 for _did, _p in DATASET_CONFIGS.items():
-    GARGAMMEL_REGISTRY[f"simx/datasets/{_did}"] = {
+    GARGAMMEL_REGISTRY[f"{OUT}/datasets/{_did}"] = {
         "endo": [f"simx/genomes/{_p['endogenous_genome']}.fa"],
         "cont": [f"simx/genomes/{_p['contaminant_genome']}.fa"],
         "bact_dir": f"simx/data/gargammel/{_p['bacterial_db']}/fasta",
@@ -40,11 +43,11 @@ include: "../shared/rules/gargammel.smk"
 
 rule all:
     input:
-        expand("simx/datasets/{dataset_id}/fastp/1.fq.gz", dataset_id=DATASET_IDS),
-        expand("simx/datasets/{dataset_id}/fastp/2.fq.gz", dataset_id=DATASET_IDS),
-        expand("simx/datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS),
-        expand("simx/datasets/{dataset_id}/ref_damage.bed", dataset_id=DATASET_IDS),
-        expand("simx/datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
+        expand(OUT + "/datasets/{dataset_id}/fastp/1.fq.gz", dataset_id=DATASET_IDS),
+        expand(OUT + "/datasets/{dataset_id}/fastp/2.fq.gz", dataset_id=DATASET_IDS),
+        expand(OUT + "/datasets/{dataset_id}/ref_ground_truth.bed", dataset_id=DATASET_IDS),
+        expand(OUT + "/datasets/{dataset_id}/ref_damage.bed", dataset_id=DATASET_IDS),
+        expand(OUT + "/datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
 
 
 GENOME_MD5 = {
@@ -140,13 +143,13 @@ rule mason_variator:
 
 rule fastp_process:
     input:
-        s1="simx/datasets/{dataset_id}/simulated_s1.fq.gz",
-        s2="simx/datasets/{dataset_id}/simulated_s2.fq.gz"
+        s1=OUT + "/datasets/{dataset_id}/simulated_s1.fq.gz",
+        s2=OUT + "/datasets/{dataset_id}/simulated_s2.fq.gz"
     output:
-        o1="simx/datasets/{dataset_id}/fastp/1.fq.gz",
-        o2="simx/datasets/{dataset_id}/fastp/2.fq.gz",
-        html="simx/datasets/{dataset_id}/fastp/fastp.html",
-        json="simx/datasets/{dataset_id}/fastp/fastp.json"
+        o1=OUT + "/datasets/{dataset_id}/fastp/1.fq.gz",
+        o2=OUT + "/datasets/{dataset_id}/fastp/2.fq.gz",
+        html=OUT + "/datasets/{dataset_id}/fastp/fastp.html",
+        json=OUT + "/datasets/{dataset_id}/fastp/fastp.json"
     threads: 4
     shell:
         """
@@ -159,13 +162,13 @@ rule fastp_process:
 
 rule parse_ground_truth:
     input:
-        r1="simx/datasets/{dataset_id}/fastp/1.fq.gz",
-        r2="simx/datasets/{dataset_id}/fastp/2.fq.gz"
+        r1=OUT + "/datasets/{dataset_id}/fastp/1.fq.gz",
+        r2=OUT + "/datasets/{dataset_id}/fastp/2.fq.gz"
     output:
-        gt="simx/datasets/{dataset_id}/endo_ground_truth.bed",
-        damage="simx/datasets/{dataset_id}/endo_damage.bed"
+        gt=OUT + "/datasets/{dataset_id}/endo_ground_truth.bed",
+        damage=OUT + "/datasets/{dataset_id}/endo_damage.bed"
     params:
-        input_dir=lambda wc: f"simx/datasets/{wc.dataset_id}"
+        input_dir=lambda wc: f"{OUT}/datasets/{wc.dataset_id}"
     shell:
         """
         python {SHARED_SCRIPTS}/parse_gargammel.py -d {params.input_dir} -1 {input.r1} -2 {input.r2} \
@@ -188,7 +191,7 @@ rule convert_vcf:
         tmp_out="simx/genomes/{var}/{ref}-fixed.vcf"
     shell: 
         """
-        {SCRIPTS}/add_vcf_format.py -i {input} -o "{params.tmp_out}"
+        python {SCRIPTS}/add_vcf_format.py -i {input} -o "{params.tmp_out}"
         bcftools sort -m 2G {params.tmp_out} | bgzip --stdout > {output.vcf}
         tabix {output.vcf}
         """
@@ -216,17 +219,17 @@ rule ref_transform:
 
 rule gt_liftover:
     input:
-        gt="simx/datasets/{dataset_id}/endo_ground_truth.bed",
-        damage="simx/datasets/{dataset_id}/endo_damage.bed",
+        gt=OUT + "/datasets/{dataset_id}/endo_ground_truth.bed",
+        damage=OUT + "/datasets/{dataset_id}/endo_damage.bed",
         vci=lambda wc: f"simx/genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.vci.gz",
         fasta=lambda wc: f"simx/genomes/{get_dataset_param(wc, 'endogenous_variation')}/{get_dataset_param(wc, 'endogenous_genome')}.fa"
     output:
-        gt="simx/datasets/{dataset_id}/ref_ground_truth.bed",
-        damage="simx/datasets/{dataset_id}/ref_damage.bed",
-        fasta="simx/datasets/{dataset_id}/ref_unsanitized.fa"
+        gt=OUT + "/datasets/{dataset_id}/ref_ground_truth.bed",
+        damage=OUT + "/datasets/{dataset_id}/ref_damage.bed",
+        fasta=OUT + "/datasets/{dataset_id}/ref_unsanitized.fa"
     params:
-        unmapped="simx/datasets/{dataset_id}/ref_ground_truth.bed.unmapped",
-        damage_unmapped="simx/datasets/{dataset_id}/ref_damage.bed.unmapped"
+        unmapped=OUT + "/datasets/{dataset_id}/ref_ground_truth.bed.unmapped",
+        damage_unmapped=OUT + "/datasets/{dataset_id}/ref_damage.bed.unmapped"
     singularity:
         "docker://churchilllab/g2gtools:3.0.0"
     shell:
@@ -247,10 +250,10 @@ rule gt_liftover:
 
 rule sanitize_ref:
     input:
-        fasta="simx/datasets/{dataset_id}/ref_unsanitized.fa"
+        fasta=OUT + "/datasets/{dataset_id}/ref_unsanitized.fa"
     output:
-        fasta="simx/datasets/{dataset_id}/ref.fa"
+        fasta=OUT + "/datasets/{dataset_id}/ref.fa"
     shell:
         """
-        {SCRIPTS}/remove_nonacgt.py -i {input.fasta} -o {output.fasta}
+        python {SCRIPTS}/remove_nonacgt.py -i {input.fasta} -o {output.fasta}
         """

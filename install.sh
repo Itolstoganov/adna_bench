@@ -13,7 +13,7 @@ CONDA="${CONDA:-conda}"
 echo "[1/3] Submodules ------------------------------------------------------"
 # gargammel fork which outputs deaminated positions. Do not use the conda `gargammel`, which lacks that feature.
 git submodule update --init gargammel
-# aMeta (optional; only for the metagenomic benchmark).
+# aMeta (for the metagenomic benchmark).
 git submodule update --init meta_bench/aMeta \
   || echo "  WARN: aMeta submodule init failed (needs GitHub SSH access)."
 
@@ -36,14 +36,5 @@ fi
 
 cat <<EOF
 
-Done. Next:
-  conda activate $ENV_NAME
-
-  # Aligner benchmark (simx): simulate + benchmark
-  simx/run.py --cores 8            # --test for a small run, --slurm for SLURM
-
-  # Metagenomic benchmark: simulate the metagenomic datasets (writes meta_bench/datasets/sim/):
-  snakemake -s meta_bench/workflow/Simulation.snake --cores 8
-
-  # Benchmark (needs aMeta + its databases): see README.md
+Done. See README.md for information on individual benchmarks
 EOF

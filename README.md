@@ -9,7 +9,11 @@ All commands are run from the repository root.
 
 ## Install
 
-Requirements: conda (or mamba), git, and for `simx` also `cargo` (to build strobealign), `curl`, `wget` and `unzip`.
+Requirements: conda (or mamba), and for `simx` also `cargo` (to build strobealign), `curl`, `wget` and `unzip`.
+
+`simx` additionally requires Singularity/Apptainer, with permission to pull and run containers from Docker Hub
+(the g2gtools steps of the simulation run in `docker://churchilllab/g2gtools`).
+On HPC clusters this usually means loading the `singularity`/`apptainer` module on the compute nodes.
 
 ```bash
 git clone https://github.com/Itolstoganov/adna_bench.git adna_bench && cd adna_bench
@@ -19,11 +23,9 @@ conda activate adna-eval
 
 ## Aligner accuracy benchmark (simx)
 
-1. Copy the example config and adjust datasets, aligner versions and parameters:
-
-   ```bash
-   cp simx/config/config_example.yaml simx/config/config.yaml
-   ```
+1. Adjust datasets, aligner versions and parameters in `simx/config/config.yaml`
+   (`simx/config/config_test.yaml` is a small fruitfly config used by `simx/run.py --test`;
+   its outputs go to `simx/test/` via the `output_dir` key).
 
 2. Run simulation and benchmark:
 

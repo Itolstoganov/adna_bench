@@ -4,8 +4,8 @@ simx/genomes
 simx/runs
 simx/csv
 simx/result
+simx/test
 simx/downloads
-simx/config/config.yaml
 simx/config/dardel_config.yml
 meta_bench/genomes
 meta_bench/datasets

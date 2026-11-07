@@ -30,7 +30,7 @@ def run_snakemake(snakefile, config, cores=None, slurm=False, secondary_accuracy
 
 def main():
     parser = argparse.ArgumentParser(description="Run the aDNA benchmark pipeline")
-    parser.add_argument("--test", action="store_true", help="Use test config (ecoli, 5000 reads)")
+    parser.add_argument("--test", action="store_true", help="Use test config (fruitfly, 5000 reads)")
     parser.add_argument("--simulate-only", action="store_true", help="Run simulation phase only")
     parser.add_argument("--benchmark-only", action="store_true", help="Run benchmark phase only")
     parser.add_argument("--cores", type=int, default=4, help="Number of cores (default: 4, ignored with --slurm)")

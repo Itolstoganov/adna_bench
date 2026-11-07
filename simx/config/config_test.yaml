@@ -1,25 +1,37 @@
 datasets:
-  - name: "ecoli_test"
-    endogenous_genome: "ecoli"
-    contaminant_genome: "ecoli"
-    endogenous_variation: "var3"
+  - name: "fruitfly"
+    endogenous_genome: "fruitfly"
+    contaminant_genome: "fruitfly"
+    endogenous_variation: ["var0p5", "var5"]
     bacterial_db: "k14"
-    read_length: 40
-    proportions: [0.7, 0.0, 0.3]
+    read_length: [40]
+    proportions: [0.2, 0.00, 0.8]  # [bacterial, contaminant, endogenous]
 
 num_reads: 5000
-score_thresholds: [25, 30, 35, 40]
-# Optional secondary-alignment accuracy (off by default; see simx/config/config.yaml).
+
+# Separate output tree so test runs do not touch the full benchmark results.
+output_dir: "simx/test"
+
+score_thresholds: [60, 70, 80]
+k: [19, 21]
+main_score_threshold: 60
+main_k: 19
+# s = k - syncmer_density + 1
+syncmer_density: 3
+
 secondary_accuracy: false
 
+# Keep versions and programs in sync with config.yaml.
 versions:
-  - commit: "cc24cbd434f4ea7dd3c7fd344e3aaaf774cf4c13"
-    name: "strobealign aDNA"
-    arguments: "--ancient-dna --mcs=always -S 0.95 -r 30 -k 12"
+  - commit: "4be2dcc208fa54a8c8caed2146adf116f52c382c"
+    color: "green"
+    name: "Strobealign-HRY"
+    arguments: "--adna --ry-len 8 -M 500 --ssw"
 
-  - commit: "15e43182765c3a13a1049c0b7eb07fd60074d8d8"
-    name: "strobealign main (15e4318)"
-    arguments: "--mcs=always -S 0.95 -r 30 -k 12"
+  - commit: "4be2dcc208fa54a8c8caed2146adf116f52c382c"
+    color: "green"
+    name: "Strobealign-DK"
+    arguments: "-l 1 -u 1 -M 500"
 
 ends:
   - se
@@ -27,4 +39,4 @@ ends:
 programs:
   - bwaaln
   - bwamem
-  - safari
+  - bowtie2
