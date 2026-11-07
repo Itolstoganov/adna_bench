@@ -25,7 +25,7 @@ conda activate adna-eval
 
 1. Adjust datasets, aligner versions and parameters in `simx/config/config.yaml`
    (`simx/config/config_test.yaml` is a small fruitfly config used by `simx/run.py --test`;
-   its outputs go to `simx/test/` via the `output_dir` key).
+   its outputs go to `simx/test/`).
 
 2. Run simulation and benchmark:
 
