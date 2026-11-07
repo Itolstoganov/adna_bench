@@ -47,12 +47,59 @@ rule all:
         expand("simx/datasets/{dataset_id}/ref.fa", dataset_id=DATASET_IDS),
 
 
-# rule simulate_genomes:
-#     input:
-#         ref="simx/genomes/{genome}.fa"
+GENOME_MD5 = {
+    "fruitfly": "035a0587c364ff245aac8c951a5bb68d",
+    "CHM13": "42b830df45df08ab63068e9128156e56",
+    "zymo": "0d3178f4c5b01a6530e7c0e163936331",
+}
 
 
-# from https://github.com/NBISweden/strobealign-evaluation 
+# fruitfly, CHM13 and ecoli50 rules follow https://github.com/NBISweden/strobealign-evaluation
+rule download_fruitfly:
+    output: "simx/genomes/fruitfly.fa"
+    params: md5=GENOME_MD5["fruitfly"]
+    shell:
+        """
+        curl -fL https://ftp.ensembl.org/pub/release-97/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.22.dna.toplevel.fa.gz \
+            | zcat > {output}.tmp.fa
+        samtools faidx {output}.tmp.fa
+        # Discard contigs shorter than 16 kbp
+        awk '$2>=16000 {{print $1}}' {output}.tmp.fa.fai > {output}.tmp.regions.txt
+        samtools faidx -r {output}.tmp.regions.txt {output}.tmp.fa > {output}.tmp2.fa
+        rm {output}.tmp.fa {output}.tmp.fa.fai {output}.tmp.regions.txt
+        echo "{params.md5}  {output}.tmp2.fa" | md5sum -c
+        mv {output}.tmp2.fa {output}
+        """
+
+
+rule download_chm13:
+    output: "simx/genomes/CHM13.fa"
+    params: md5=GENOME_MD5["CHM13"]
+    shell:
+        """
+        curl -fL https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz \
+            | zcat > {output}.tmp.fa
+        echo "{params.md5}  {output}.tmp.fa" | md5sum -c
+        mv {output}.tmp.fa {output}
+        """
+
+
+# ZymoBIOMICS Microbial Community Standard reference genomes, concatenated in name order.
+rule download_zymo:
+    output: "simx/genomes/zymo.fa"
+    params: md5=GENOME_MD5["zymo"]
+    shell:
+        """
+        tmp=$(mktemp -d)
+        curl -fL -o $tmp/refseq.zip https://s3.amazonaws.com/zymo-files/BioPool/ZymoBIOMICS.STD.refseq.v2.zip
+        unzip -q -d $tmp $tmp/refseq.zip
+        cat $(LC_ALL=C ls $tmp/ZymoBIOMICS.STD.refseq.v2/Genomes/*.fasta) > {output}.tmp.fa
+        rm -rf $tmp
+        echo "{params.md5}  {output}.tmp.fa" | md5sum -c
+        mv {output}.tmp.fa {output}
+        """
+
+
 rule download_ecoli50:
     output:
         "simx/downloads/ecoli50/done.txt"

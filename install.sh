@@ -45,5 +45,5 @@ Done. Next:
   # Metagenomic benchmark: simulate the metagenomic datasets (writes meta_bench/results/sim/):
   snakemake -s meta_bench/workflow/Simulation.snake --cores 8
 
-  # Benchmark (needs aMeta + its databases): see meta_bench/README.md
+  # Benchmark (needs aMeta + its databases): see README.md
 EOF
