@@ -47,7 +47,7 @@ Results are written to `simx/result/`: per-dataset `accuracy_table.tsv`, `resour
 1. **databases**: download the [KrakenUniq](https://github.com/fbreitwieser/krakenuniq) and [MALT](https://github.com/husonlab/malt) databases (~750 GB) to `data/` at the repo root. Symlink `data/` to a large disk first if needed.
 2. **simulate**: simulate the samples with gargammel using the workflow in `meta_bench/workflow/Simulation.snake`. Composition and parameters are set up in `meta_bench/config/benchmark.yaml`. Reference genomes are in `meta_bench/config/accessions.tsv`. Reads and per-read ground truth will be created in `meta_bench/datasets/sim/{sample}/`.
 3. **ameta**: run aMeta ([submodule version](https://github.com/Itolstoganov/aMeta/tree/bowtie2-profiler)) in `meta_bench/runs/sim_dataset/` using configs from `meta_bench/config/ameta.yaml`.
-4. **summary**: score the authentication results against the ground truth, and summarise runtime and memory. Results are written to `meta_bench/runs/sim_dataset/results/`. `meta_summary/` holds the ground-truth heatmap and metrics, `meta_summary/bench/` the runtime/memory summary.
+4. **summary**: score the authentication results against the ground truth, and summarise runtime and memory. Results are written to `meta_bench/runs/sim_dataset/results/`: its `meta_summary/` subdirectory holds the ground-truth heatmap and metrics, `meta_summary/bench/` the runtime/memory summary.
 
 ```bash
 meta_bench/run_full_benchmark.sh               # all four steps
@@ -71,11 +71,11 @@ Output files used in the figures of the [Hybrid RY-mers increase aDNA alignment 
 | 2 | c | `simx/result/summary_plots/accuracy_deam_diff.png` |
 | 2 | d | `simx/result/summary_plots/k_runtime_nolegend.png` |
 | 2 | e | `simx/result/summary_plots/k_memory.png` |
-| 3 | a | `meta_summary/auth_jaccard_threshold.pdf` |
-| 3 | b | `meta_summary/bench/bench_profiling_runtime.pdf` |
-| 3 | c | `meta_summary/bench/bench_index_runtime.pdf` |
-| 3 | d | `meta_summary/bench/bench_peak_memory.pdf` |
+| 3 | a | `meta_bench/runs/sim_dataset/results/meta_summary/auth_jaccard_threshold.pdf` |
+| 3 | b | `meta_bench/runs/sim_dataset/results/meta_summary/bench/bench_profiling_runtime.pdf` |
+| 3 | c | `meta_bench/runs/sim_dataset/results/meta_summary/bench/bench_index_runtime.pdf` |
+| 3 | d | `meta_bench/runs/sim_dataset/results/meta_summary/bench/bench_peak_memory.pdf` |
 | S1 | | `simx/result/summary_plots/combined_k_accuracy.png` |
 | S2 | | `simx/result/summary_plots/combined_k_runtime.png` |
-| S3 | | `meta_summary/auth_ani_scatter.ancient.pdf` |
-| S4 | | `meta_summary/auth_criteria_table.ancient.pdf` |
+| S3 | | `meta_bench/runs/sim_dataset/results/meta_summary/auth_ani_scatter.ancient.pdf` |
+| S4 | | `meta_bench/runs/sim_dataset/results/meta_summary/auth_criteria_table.ancient.pdf` |
